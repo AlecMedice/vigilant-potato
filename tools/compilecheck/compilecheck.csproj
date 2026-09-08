@@ -1,0 +1,31 @@
+<!--
+  Headless syntax + type check for Assets/Scripts, with no Unity install required.
+
+  UnityStubs.cs and NetcodeStubs.cs declare the SHAPE of the UnityEngine / TextMeshPro /
+  Netcode-for-GameObjects APIs the game scripts touch - signatures only, no behaviour. Compiling the
+  real gameplay scripts against them catches typos, bad overloads, wrong types and unused fields in
+  seconds, which is the fast half of the feedback loop Unity's own domain reload is slow at.
+
+  It does NOT replace opening the project: it cannot verify NGO's IL post-processing (RPC codegen,
+  NetworkVariable registration) or anything about scenes, prefabs or serialized references.
+
+  Run both input backends - the input abstraction is #if-switched, so one pass only covers one half:
+      dotnet build tools/compilecheck
+      dotnet build tools/compilecheck -p:DefineConstants="ENABLE_INPUT_SYSTEM"
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <!-- CS0649: [SerializeField] fields are assigned by Unity's serializer, not by C#. -->
+    <NoWarn>CS0067;CS0649;CS0108;CS0114;CS0660;CS0661</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="UnityStubs.cs" />
+    <Compile Include="NetcodeStubs.cs" />
+    <Compile Include="../../Assets/Scripts/**/*.cs" />
+  </ItemGroup>
+</Project>

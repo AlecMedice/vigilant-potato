@@ -1,0 +1,50 @@
+# Unity generated
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+[Mm]emoryCaptures/
+[Rr]ecordings/
+
+# Never commit these; they are regenerated from Assets/ + Packages/
+/[Aa]ssets/AssetStoreTools*
+/[Aa]ssets/Plugins/Editor/JetBrains*
+.vs/
+.gradle/
+ExportedObj/
+*.unitypackage
+*.apk
+*.aab
+*.app
+crashlytics-build.properties
+
+# Auto-generated IDE / solution files
+*.csproj
+# ...but the compile-check harness's project file is hand-written and must be tracked.
+!tools/compilecheck/compilecheck.csproj
+*.unityproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local compile-verification scratch (see docs/EDITOR_SETUP.md)
+/tools/compilecheck/bin/
+/tools/compilecheck/obj/
