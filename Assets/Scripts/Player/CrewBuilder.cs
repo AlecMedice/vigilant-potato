@@ -10,9 +10,11 @@
 // -----------------------------------------------------------------------------
 
 using LochNess.Boot;
+using LochNess.UI;
 using Unity.Netcode;
 using Unity.Netcode.Components;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace LochNess.Player
 {
@@ -103,25 +105,10 @@ namespace LochNess.Player
             return head;
         }
 
-        private static TextMesh BuildNameTag(Transform parent)
+        private static Text BuildNameTag(Transform parent)
         {
-            var go = new GameObject("Name Tag");
-            go.transform.SetParent(parent, false);
-            go.transform.localPosition = new Vector3(0f, 2.05f, 0f);
-
-            var text = go.AddComponent<TextMesh>();
-            text.font = Fonts.Builtin;
-            text.text = "";
-            text.characterSize = 0.06f;
-            text.fontSize = 64;
-            text.anchor = TextAnchor.LowerCenter;
-            text.alignment = TextAlignment.Center;
-            text.color = new Color(0.90f, 0.88f, 0.80f);
-
-            var renderer = go.GetComponent<MeshRenderer>();
-            if (renderer != null && text.font != null) renderer.sharedMaterial = text.font.material;
-
-            return text;
+            return UIKit.WorldLabel(parent, new Vector3(0f, 2.08f, 0f), string.Empty,
+                                    new Color(0.90f, 0.88f, 0.80f));
         }
 
         private static Transform BuildCameraMount(Transform parent)

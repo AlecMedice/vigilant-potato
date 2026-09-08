@@ -9,9 +9,11 @@
 
 using LochNess.Boot;
 using LochNess.Player;
+using LochNess.UI;
 using Unity.Netcode;
 using Unity.Netcode.Components;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace LochNess.AI
 {
@@ -64,25 +66,10 @@ namespace LochNess.AI
             return body;
         }
 
-        private static TextMesh BuildNameTag(Transform parent)
+        private static Text BuildNameTag(Transform parent)
         {
-            var go = new GameObject("Name Tag");
-            go.transform.SetParent(parent, false);
-            go.transform.localPosition = new Vector3(0f, 2.05f, 0f);
-
-            var text = go.AddComponent<TextMesh>();
-            text.font = Fonts.Builtin;
-            text.text = CrewmateName;
-            text.characterSize = 0.06f;
-            text.fontSize = 64;
-            text.anchor = TextAnchor.LowerCenter;
-            text.alignment = TextAlignment.Center;
-            text.color = new Color(0.86f, 0.62f, 0.60f);
-
-            var renderer = go.GetComponent<MeshRenderer>();
-            if (renderer != null && text.font != null) renderer.sharedMaterial = text.font.material;
-
-            return text;
+            return UIKit.WorldLabel(parent, new Vector3(0f, 2.08f, 0f), CrewmateName,
+                                    new Color(0.86f, 0.62f, 0.60f));
         }
     }
 }

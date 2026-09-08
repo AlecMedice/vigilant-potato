@@ -280,12 +280,19 @@ namespace UnityEngine
         public Shader shader;
         public Color color;
         public int renderQueue;
+        public MaterialGlobalIlluminationFlags globalIlluminationFlags;
         public bool HasProperty(string name) => false;
         public void SetFloat(string name, float value) { }
         public void SetInt(string name, int value) { }
         public void SetColor(string name, Color value) { }
         public void EnableKeyword(string keyword) { }
         public void DisableKeyword(string keyword) { }
+    }
+
+    [Flags]
+    public enum MaterialGlobalIlluminationFlags
+    {
+        None = 0, RealtimeEmissive = 1, BakedEmissive = 2, EmissiveIsBlack = 4, AnyEmissive = RealtimeEmissive | BakedEmissive
     }
 
     public class Texture : Object { public FilterMode filterMode; public TextureWrapMode wrapMode; }

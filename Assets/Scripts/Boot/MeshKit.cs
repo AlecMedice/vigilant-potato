@@ -27,40 +27,64 @@ namespace LochNess.Boot
     {
         // Materials are cached by colour so the whole loch shares a handful of them.
         private static readonly Dictionary<int, Material> MaterialCache = new Dictionary<int, Material>();
-        private static Shader _opaqueShader;
-        private static Shader _transparentShader;
+        private static Shader _litShader;
+        private static bool _pipelineResolved;
+        private static bool _universal;
 
         /// <summary>
-        /// The project runs on the built-in render pipeline on purpose: URP without a
-        /// configured pipeline asset renders every object magenta, and a pipeline
-        /// asset is exactly the kind of file that cannot be authored outside the
-        /// Editor. "Standard" is always present.
+        /// Resolve the lit shader for whichever render pipeline is actually active.
+        ///
+        /// The project targets the Universal Render Pipeline, but the shader is looked
+        /// up by name rather than by referencing URP's assemblies. Two reasons: this
+        /// file then has no package dependency and still compiles and runs under the
+        /// built-in pipeline, and a missing shader degrades to a fallback instead of
+        /// failing to compile.
+        ///
+        /// The consequence for callers is that a material's property NAMES differ
+        /// between pipelines — URP/Lit uses _BaseColor and _Smoothness where Standard
+        /// uses _Color and _Glossiness — which is why every set below is guarded by
+        /// HasProperty rather than assumed.
         /// </summary>
-        private static Shader OpaqueShader
+        private static Shader LitShader
         {
             get
             {
-                if (_opaqueShader == null)
+                if (!_pipelineResolved)
                 {
-                    _opaqueShader = Shader.Find("Standard")
-                                    ?? Shader.Find("Diffuse")
-                                    ?? Shader.Find("Legacy Shaders/Diffuse");
+                    _pipelineResolved = true;
+
+                    _litShader = Shader.Find("Universal Render Pipeline/Lit");
+                    _universal = _litShader != null;
+
+                    if (_litShader == null) _litShader = Shader.Find("Standard");
+                    if (_litShader == null) _litShader = Shader.Find("Legacy Shaders/Diffuse");
+
+                    if (_litShader == null)
+                    {
+                        Debug.LogError(
+                            "[MeshKit] No lit shader found. If this project uses URP, make sure a URP asset " +
+                            "is assigned under Project Settings > Graphics > Default Render Pipeline.");
+                    }
                 }
-                return _opaqueShader;
+                return _litShader;
             }
         }
 
-        private static Shader TransparentShader
+        /// <summary>True when the Universal Render Pipeline's shaders are the ones in use.</summary>
+        public static bool IsUniversal { get { _ = LitShader; return _universal; } }
+
+        /// <summary>Set base colour under whichever property name this pipeline uses.</summary>
+        private static void SetBaseColour(Material m, Color colour)
         {
-            get
-            {
-                if (_transparentShader == null)
-                {
-                    _transparentShader = Shader.Find("Standard")
-                                         ?? Shader.Find("Legacy Shaders/Transparent/Diffuse");
-                }
-                return _transparentShader;
-            }
+            if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", colour);
+            if (m.HasProperty("_Color")) m.SetColor("_Color", colour);
+        }
+
+        private static void SetSurface(Material m, float smoothness, float metallic)
+        {
+            if (m.HasProperty("_Smoothness")) m.SetFloat("_Smoothness", smoothness);   // URP
+            if (m.HasProperty("_Glossiness")) m.SetFloat("_Glossiness", smoothness);   // built-in
+            if (m.HasProperty("_Metallic")) m.SetFloat("_Metallic", metallic);
         }
 
         /// <summary>An opaque material of the given colour, shared between callers.</summary>
@@ -69,49 +93,72 @@ namespace LochNess.Boot
             int key = colour.GetHashCode() ^ (Mathf.RoundToInt(smoothness * 100f) << 8) ^ (Mathf.RoundToInt(metallic * 100f) << 16);
             if (MaterialCache.TryGetValue(key, out Material cached) && cached != null) return cached;
 
-            Material m = new Material(OpaqueShader);
-            m.color = colour;
-            if (m.HasProperty("_Glossiness")) m.SetFloat("_Glossiness", smoothness);
-            if (m.HasProperty("_Metallic")) m.SetFloat("_Metallic", metallic);
+            Material m = new Material(LitShader);
+            SetBaseColour(m, colour);
+            SetSurface(m, smoothness, metallic);
+
             MaterialCache[key] = m;
             return m;
         }
 
         /// <summary>
-        /// A translucent material. Setting up alpha blending on the Standard shader
-        /// requires poking the render state directly — the shader's "Rendering Mode"
-        /// dropdown is an Editor-only convenience that just sets these values.
+        /// A translucent material.
+        ///
+        /// Both pipelines need the blend state poking directly: the "Surface Type"
+        /// dropdown in URP and the "Rendering Mode" dropdown on Standard are Editor
+        /// conveniences that just write these values, and neither runs at runtime.
+        /// The property sets are different enough to be worth branching on.
         /// </summary>
         public static Material Translucent(Color colour, float smoothness = 0.85f)
         {
-            Material m = new Material(TransparentShader);
-            m.color = colour;
-            if (m.HasProperty("_Glossiness")) m.SetFloat("_Glossiness", smoothness);
-            if (m.HasProperty("_Metallic")) m.SetFloat("_Metallic", 0.1f);
-            if (m.HasProperty("_Mode"))
+            Material m = new Material(LitShader);
+            SetBaseColour(m, colour);
+            SetSurface(m, smoothness, 0.1f);
+
+            if (IsUniversal)
             {
-                m.SetFloat("_Mode", 3f); // Transparent
-                m.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
-                m.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
-                m.SetInt("_ZWrite", 0);
+                if (m.HasProperty("_Surface")) m.SetFloat("_Surface", 1f);  // 0 opaque, 1 transparent
+                if (m.HasProperty("_Blend")) m.SetFloat("_Blend", 0f);      // alpha blend
+                if (m.HasProperty("_AlphaClip")) m.SetFloat("_AlphaClip", 0f);
+                if (m.HasProperty("_SrcBlend")) m.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+                if (m.HasProperty("_DstBlend")) m.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                if (m.HasProperty("_ZWrite")) m.SetInt("_ZWrite", 0);
+
+                m.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+                m.DisableKeyword("_ALPHATEST_ON");
+                m.renderQueue = 3000;
+            }
+            else
+            {
+                if (m.HasProperty("_Mode")) m.SetFloat("_Mode", 3f); // Transparent
+                if (m.HasProperty("_SrcBlend")) m.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+                if (m.HasProperty("_DstBlend")) m.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                if (m.HasProperty("_ZWrite")) m.SetInt("_ZWrite", 0);
+
                 m.DisableKeyword("_ALPHATEST_ON");
                 m.EnableKeyword("_ALPHABLEND_ON");
                 m.DisableKeyword("_ALPHAPREMULTIPLY_ON");
                 m.renderQueue = 3000;
             }
+
             return m;
         }
 
-        /// <summary>An unlit, always-visible material — used for lamps and the scope glow.</summary>
+        /// <summary>A glowing material — lamps, the scope face, her eyes.</summary>
         public static Material Emissive(Color colour)
         {
-            Material m = new Material(OpaqueShader);
-            m.color = colour;
+            Material m = new Material(LitShader);
+            SetBaseColour(m, colour);
+
+            // Emission is one of the few things spelled the same in both pipelines.
             if (m.HasProperty("_EmissionColor"))
             {
                 m.EnableKeyword("_EMISSION");
                 m.SetColor("_EmissionColor", colour * 1.6f);
+                if (m.HasProperty("_EmissionEnabled")) m.SetFloat("_EmissionEnabled", 1f);
+                m.globalIlluminationFlags = MaterialGlobalIlluminationFlags.RealtimeEmissive;
             }
+
             return m;
         }
 

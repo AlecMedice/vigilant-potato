@@ -30,6 +30,7 @@ using LochNess.World;
 using Unity.Collections;
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace LochNess.Player
 {
@@ -70,7 +71,7 @@ namespace LochNess.Player
         // ---- Local -----------------------------------------------------------
         private Transform _body;
         private Transform _head;
-        private TextMesh _nameTag;
+        private Text _nameTag;
         private Transform _viewRig;
         private Camera _camera;
 
@@ -88,7 +89,7 @@ namespace LochNess.Player
         public Camera View => _camera;
 
         /// <summary>Called by CrewBuilder before the prefab is forged.</summary>
-        public void Bind(Transform body, Transform head, TextMesh nameTag, Transform viewRig)
+        public void Bind(Transform body, Transform head, Text nameTag, Transform viewRig)
         {
             _body = body;
             _head = head;
@@ -169,7 +170,6 @@ namespace LochNess.Player
             // owner rendering the inside of their own head.
             foreach (Renderer renderer in GetComponentsInChildren<Renderer>(true))
             {
-                if (renderer.transform == _nameTag?.transform) { renderer.enabled = false; continue; }
                 renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly;
             }
         }
@@ -177,7 +177,10 @@ namespace LochNess.Player
         private void RefreshNameTag(string value)
         {
             if (_nameTag == null) return;
-            _nameTag.text = IsOwner ? string.Empty : value;
+            // The tag is a uGUI Graphic, not a Renderer, so it is switched off by its
+            // own enabled flag rather than by the body-hiding sweep above.
+            _nameTag.enabled = !IsOwner;
+            _nameTag.text = value;
             _nameTag.color = CrewBuilder.SlickerFor(OwnerClientId);
         }
 

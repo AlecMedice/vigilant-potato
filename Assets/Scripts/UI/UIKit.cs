@@ -183,6 +183,42 @@ namespace LochNess.UI
             return toggle;
         }
 
+        /// <summary>
+        /// A floating label in world space — crew name tags.
+        ///
+        /// Deliberately NOT a TextMesh. TextMesh draws through the built-in
+        /// `GUI/Text Shader`, which the Universal Render Pipeline does not ship, so
+        /// every name tag would render magenta. uGUI's text goes through the UI
+        /// shader, which URP does support.
+        /// </summary>
+        public static Text WorldLabel(Transform parent, Vector3 localPosition, string content,
+                                      Color colour, float worldScale = 0.0055f)
+        {
+            var go = new GameObject("Name Tag", typeof(RectTransform), typeof(Canvas),
+                                    typeof(CanvasRenderer), typeof(Text));
+
+            var rect = (RectTransform)go.transform;
+            rect.SetParent(parent, false);
+            rect.localPosition = localPosition;
+            rect.localRotation = Quaternion.identity;
+            rect.sizeDelta = new Vector2(420f, 90f);
+            rect.localScale = new Vector3(worldScale, worldScale, worldScale);
+
+            go.GetComponent<Canvas>().renderMode = RenderMode.WorldSpace;
+
+            var text = go.GetComponent<Text>();
+            text.font = Fonts.Builtin;
+            text.text = content;
+            text.fontSize = 48;
+            text.color = colour;
+            text.alignment = TextAnchor.MiddleCenter;
+            text.horizontalOverflow = HorizontalWrapMode.Overflow;
+            text.verticalOverflow = VerticalWrapMode.Overflow;
+            text.raycastTarget = false;
+
+            return text;
+        }
+
         /// <summary>A one-pixel horizontal rule, for separating blocks of readout.</summary>
         public static void Divider(Transform parent, float yFromTop, float inset = 0f)
         {

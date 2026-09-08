@@ -5,7 +5,7 @@ players crew a single survey launch: somebody drives, somebody works the sonar,
 somebody watches the water. A server-authoritative monster listens for your pings and
 tries not to be found.
 
-Unity 6 (or 2022.3 LTS) · C# · Netcode for GameObjects · Windows, macOS, Linux.
+Unity 6 · URP · C# · Netcode for GameObjects · Windows, macOS, Linux.
 
 ---
 
@@ -15,15 +15,29 @@ Unity 6 (or 2022.3 LTS) · C# · Netcode for GameObjects · Windows, macOS, Linu
 git clone <this repo>
 ```
 
-1. Open the folder in Unity Hub. Any Unity 6 (6000.x) or 2022.3 LTS install will do;
-   if the version differs from `ProjectSettings/ProjectVersion.txt` you will get a
+1. Open the folder in Unity Hub with **Unity 6 (6000.x)**. A different version gives a
    one-time upgrade prompt, which is safe to accept.
-2. Let it import. It will fetch Netcode for GameObjects from the package manager.
-3. Press **Play**.
+2. Let it import — it fetches URP and Netcode for GameObjects from the package manager.
+3. **Assign a URP asset.** Right-click in the Project window → Create → Rendering →
+   *URP Asset (with Universal Renderer)*, then Project Settings → Graphics → set it as
+   the Default Render Pipeline. This is the one manual step, and it is unavoidable: a
+   pipeline asset cannot be authored outside the Editor, and without one URP renders
+   everything magenta.
+4. Check Project Settings → Player → Other Settings → **Active Input Handling** is
+   `Both` or `Input Manager (Old)`. The code uses `UnityEngine.Input`, which throws on
+   the first frame if only the new Input System is active.
+5. Press **Play**.
 
-That is the whole setup. There is no scene to assemble, no prefab to wire, no NavMesh
-to bake, no inspector reference to assign. **The game boots from any scene**, including
-an empty one — see *Why everything is built in code* below.
+### Dropping the scripts into an existing project
+
+If you already have a Unity 6 URP project, copy **`Assets/Scripts/` only** — not
+`ProjectSettings/`, not `Packages/manifest.json`, not the scene. Then install
+`com.unity.netcode.gameobjects` from the Package Manager, check Active Input Handling
+as above, and press Play. The pipeline asset is already set up for you by the URP template.
+
+Apart from the pipeline asset there is nothing to assemble: no scene to build, no
+prefab to wire, no NavMesh to bake, no inspector reference to assign. **The game boots
+from any scene**, including an empty one — see *Why everything is built in code* below.
 
 ### Playing together
 
@@ -81,7 +95,7 @@ this prototype exists to test.
 Written before the code, revised once when the design changed from "a boat each" to
 "one boat, many crew".
 
-1. **Project skeleton** — `ProjectSettings/`, a trimmed package manifest, one scene.
+1. **Project skeleton** — `ProjectSettings/`, a package manifest, one scene.
 2. **Boot from code** so pressing Play in any scene starts the game.
 3. **`NetworkPrefabForge`** — build and register NGO prefabs at runtime.
 4. **The loch** — seeded terrain, animated water with real buoyancy sampling, fog.
@@ -96,7 +110,8 @@ Flagged here because they are the ones most worth arguing with.
 
 | Decision | Reason |
 |---|---|
-| Built-in render pipeline, not URP | URP without a pipeline asset renders everything magenta, and a pipeline asset cannot be authored outside the Editor. |
+| URP, not HDRP | Unity is retiring the built-in pipeline, so URP is the right target. HDRP is heavier than this needs and narrows platform support. Materials are set up by property name with `HasProperty` guards, so the code still runs under the built-in pipeline if it has to — see `MeshKit`. |
+| World-space uGUI name tags, not `TextMesh` | `TextMesh` draws through the built-in `GUI/Text Shader`, which URP does not ship, so every name tag would render magenta. |
 | No NavMesh | A NavMesh is baked in world space and **the deck moves**, so agents cannot path on it. The monster also swims in open 3D, which a NavMesh does not describe. Both use steering. |
 | Legacy input, not the Input System | The Input System needs an `.inputactions` asset. This project ships no authored assets. |
 | Nobody can fall off the boat | Removes a whole family of moving-platform bugs for no real loss — the launch is railed all round. |

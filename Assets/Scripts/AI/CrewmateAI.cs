@@ -21,6 +21,7 @@ using LochNess.Sim;
 using LochNess.Vessel;
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace LochNess.AI
 {
@@ -35,14 +36,14 @@ namespace LochNess.AI
         [SerializeField] private float walkSpeed = 1.9f;
 
         private Transform _body;
-        private TextMesh _nameTag;
+        private Text _nameTag;
 
         private float _nextPingAt;
         private float _nextRadioAt;
         private Vector3 _targetLocal;
         private bool _holdsSonar;
 
-        public void Bind(Transform body, TextMesh nameTag)
+        public void Bind(Transform body, Text nameTag)
         {
             _body = body;
             _nameTag = nameTag;
