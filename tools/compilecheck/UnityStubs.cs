@@ -28,6 +28,8 @@ namespace UnityEngine
         public static void DestroyImmediate(Object o) { }
         public static void DontDestroyOnLoad(Object o) { }
         public static T FindObjectOfType<T>() where T : Object => default;
+        public static T FindAnyObjectByType<T>() where T : Object => default;
+        public static T[] FindObjectsByType<T>(FindObjectsSortMode sortMode) where T : Object => default;
         public static T Instantiate<T>(T original) where T : Object => default;
         public static GameObject Instantiate(GameObject original) => default;
         public static GameObject Instantiate(GameObject original, Vector3 position, Quaternion rotation) => default;
@@ -39,6 +41,7 @@ namespace UnityEngine
     }
 
     public enum HideFlags { None = 0 }
+    public enum FindObjectsSortMode { None, InstanceID }
 
     public struct Vector2
     {
@@ -204,6 +207,7 @@ namespace UnityEngine
         public Vector3 up => default;
         public Vector3 right => default;
         public Transform parent;
+        public Transform root => default;
         public int childCount => 0;
         public void SetParent(Transform parent) { }
         public void SetParent(Transform parent, bool worldPositionStays) { }

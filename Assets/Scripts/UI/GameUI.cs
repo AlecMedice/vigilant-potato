@@ -98,7 +98,7 @@ namespace LochNess.UI
 
         private void BuildEventSystem()
         {
-            if (Object.FindObjectOfType<EventSystem>() != null) return;
+            if (Object.FindAnyObjectByType<EventSystem>() != null) return;
 
             var go = new GameObject("Event System");
             go.transform.SetParent(transform, false);

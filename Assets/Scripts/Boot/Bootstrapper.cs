@@ -108,6 +108,62 @@ namespace LochNess.Boot
             return go;
         }
 
+        private void Start()
+        {
+            AdoptScene();
+        }
+
+        /// <summary>
+        /// Take over the scene we happen to have booted into.
+        ///
+        /// Every Unity template ships a scene containing a Main Camera (with an
+        /// AudioListener) and a Directional Light. This game builds its own of each,
+        /// so leaving the scene's copies enabled means two cameras rendering the same
+        /// view with undefined ordering, two directional lights washing out the dusk
+        /// the atmosphere is carefully set up for, and a duplicate-AudioListener
+        /// warning logged every single frame.
+        ///
+        /// Runs in Start rather than Awake: this object is created BeforeSceneLoad, so
+        /// at Awake the scene's own objects do not exist yet.
+        ///
+        /// They are disabled, never destroyed — this is somebody else's scene, and it
+        /// should be intact again when they stop playing.
+        /// </summary>
+        private void AdoptScene()
+        {
+            int cameras = 0, listeners = 0, lights = 0;
+
+            foreach (Camera camera in FindObjectsByType<Camera>(FindObjectsSortMode.None))
+            {
+                if (IsOurs(camera.transform) || !camera.enabled) continue;
+                camera.enabled = false;
+                cameras++;
+            }
+
+            foreach (AudioListener listener in FindObjectsByType<AudioListener>(FindObjectsSortMode.None))
+            {
+                if (IsOurs(listener.transform) || !listener.enabled) continue;
+                listener.enabled = false;
+                listeners++;
+            }
+
+            foreach (Light light in FindObjectsByType<Light>(FindObjectsSortMode.None))
+            {
+                if (IsOurs(light.transform) || !light.enabled) continue;
+                light.enabled = false;
+                lights++;
+            }
+
+            if (cameras + listeners + lights > 0)
+            {
+                Debug.Log($"[Boot] Took over the open scene: disabled {cameras} camera(s), " +
+                          $"{listeners} audio listener(s) and {lights} light(s). They are restored on stop.");
+            }
+        }
+
+        /// <summary>True if this transform belongs to the game's own boot hierarchy.</summary>
+        private bool IsOurs(Transform candidate) => candidate != null && candidate.root == transform;
+
         private void OnDestroy()
         {
             if (_instance == this) _instance = null;
