@@ -1,15 +1,13 @@
 {
   "dependencies": {
-    "com.unity.ai.navigation": "2.0.5",
-    "com.unity.inputsystem": "1.11.2",
     "com.unity.netcode.gameobjects": "2.2.0",
-    "com.unity.render-pipelines.universal": "17.0.3",
     "com.unity.ugui": "2.0.0",
     "com.unity.modules.audio": "1.0.0",
+    "com.unity.modules.imgui": "1.0.0",
+    "com.unity.modules.jsonserialize": "1.0.0",
     "com.unity.modules.physics": "1.0.0",
     "com.unity.modules.ui": "1.0.0",
     "com.unity.modules.uielements": "1.0.0",
-    "com.unity.modules.unityanalytics": "1.0.0",
     "com.unity.modules.unitywebrequest": "1.0.0"
   }
 }

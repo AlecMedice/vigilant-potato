@@ -1,17 +1,16 @@
 <!--
-  Headless syntax + type check for Assets/Scripts, with no Unity install required.
+  Headless syntax and type check for Assets/Scripts, with no Unity install required.
 
-  UnityStubs.cs and NetcodeStubs.cs declare the SHAPE of the UnityEngine / TextMeshPro /
-  Netcode-for-GameObjects APIs the game scripts touch - signatures only, no behaviour. Compiling the
-  real gameplay scripts against them catches typos, bad overloads, wrong types and unused fields in
-  seconds, which is the fast half of the feedback loop Unity's own domain reload is slow at.
+  UnityStubs.cs and NetcodeStubs.cs declare the SHAPE of the UnityEngine and
+  Netcode-for-GameObjects APIs the game touches - signatures only, no behaviour.
+  Compiling the real gameplay scripts against them catches typos, bad overloads,
+  wrong types and broken overrides in seconds.
 
-  It does NOT replace opening the project: it cannot verify NGO's IL post-processing (RPC codegen,
-  NetworkVariable registration) or anything about scenes, prefabs or serialized references.
+  It does NOT replace opening the project: it cannot verify NGO's IL
+  post-processing (RPC codegen, NetworkVariable registration), nor anything about
+  runtime behaviour, rendering or replication.
 
-  Run both input backends - the input abstraction is #if-switched, so one pass only covers one half:
-      dotnet build tools/compilecheck
-      dotnet build tools/compilecheck -p:DefineConstants="ENABLE_INPUT_SYSTEM"
+      bash tools/compilecheck/run.sh
 -->
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>

@@ -1,692 +1,480 @@
-// ---------------------------------------------------------------------------------------------
-//  NessieAI.cs
-//  Role : Server-authoritative monster. Wandering / Hiding / Fleeing state machine plus the
-//         network-visibility rules that stop clients from simply reading her position.
+// -----------------------------------------------------------------------------
+// NessieAI — the quarry. Server-authoritative, three states, and hard to find.
 //
-//  AUTHORITY - the single most important decision in this project
-//  --------------------------------------------------------------------------------------------
-//  Nessie is owned by the SERVER and by nobody else:
-//      * The state machine, NavMeshAgent and threat model execute only when IsServer is true.
-//      * Clients receive a replicated position (stock server-authoritative NetworkTransform) and a
-//        replicated NessieState for VFX/audio. They never simulate her.
-//      * The NavMeshAgent is DISABLED on every client. Leaving it enabled is the classic NGO bug:
-//        the agent and NetworkTransform both write the transform and fight each other, producing
-//        a monster that stutters and teleports on every client except the host.
+// AUTHORITY
+// She is simulated only on the host. Clients receive a replicated transform and
+// nothing else — no destination, no threat value, no reasoning. That is not
+// tidiness, it is the game: an opponent whose position clients can read is an
+// opponent players can trivially cheat against, and this whole design exists to
+// make finding her difficult.
 //
-//  THE INFORMATION LEAK, AND THE FIX
-//  --------------------------------------------------------------------------------------------
-//  A replicated NetworkTransform is readable by anyone running a modified client - a wallhack that
-//  trivially defeats a hide-and-seek game. We close it with distance-based NETWORK VISIBILITY:
-//  Nessie is only spawned on clients whose boat is inside VisibilityRadius, so a distant client
-//  receives no transform data at all. Sonar remains server-resolved on top of that.
+// NETWORK VISIBILITY
+// Replicating her transform to everyone would leak her position even with
+// server-resolved sonar — a modified client just reads the NetworkTransform. So
+// she is NetworkHidden from any client too far away to legitimately see her, with
+// hysteresis on the boundary so a boat loitering at the edge does not cause a
+// stream of spawn/despawn churn.
 //
-//  Known residual: NGO cannot hide an object from the host's own client (it IS the server), so a
-//  cheating HOST could still see her. We mitigate visually with a client-side render gate below,
-//  and note the real fix - a dedicated server build - in the README. Host trust is unavoidable in
-//  a listen-server topology.
-// ---------------------------------------------------------------------------------------------
+// The honest limitation, stated once: NGO cannot hide an object from the HOST's
+// own client, because that client *is* the server. A cheating host can therefore
+// see her. The client-side render gate below hides her visually, which defeats a
+// casual host but not a determined one. The real fix is a dedicated server build,
+// and that is the recommendation if this ever runs for strangers.
+//
+// The decision-making itself lives in Sim/QuarryBrain.cs, engine-free.
+// -----------------------------------------------------------------------------
 
-using System;
-using System.Collections.Generic;
+using LochNess.Boot;
+using LochNess.Sim;
+using LochNess.World;
 using Unity.Netcode;
 using UnityEngine;
-using UnityEngine.AI;
 
-namespace LochNess
+namespace LochNess.AI
 {
-    /// <summary>Nessie's behavioural state. Byte-backed to keep the NetworkVariable one byte wide.</summary>
-    public enum NessieState : byte
+    public sealed class NessieAI : NetworkBehaviour
     {
-        Wandering = 0,  // Unbothered. Cruises the loch on a lazy patrol.
-        Hiding = 1,     // Suspicious. Slips into deep water and goes quiet - hard to detect.
-        Fleeing = 2     // Spooked. Sprints away at speed - fast, but LOUD and easy to track.
-    }
-
-    [RequireComponent(typeof(NetworkObject))]
-    [RequireComponent(typeof(NavMeshAgent))]
-    [DisallowMultipleComponent]
-    public class NessieAI : NetworkBehaviour
-    {
-        /// <summary>The server's Nessie. Null on clients and before spawn - always null-check.</summary>
+        /// <summary>The host's instance. Null on clients — deliberately.</summary>
         public static NessieAI ServerInstance { get; private set; }
 
-        /// <summary>Raised on every peer when the replicated state changes. Hook VFX/audio here.</summary>
-        public event Action<NessieState> OnStateChanged;
+        [Header("Swimming")]
+        [SerializeField] private float turnRateDegrees = 42f;
+        [SerializeField] private float pitchRateDegrees = 26f;
+        [SerializeField] private float maxPitchDegrees = 34f;
+        [Tooltip("How briskly she reaches her ordered speed. She is large; this is slow.")]
+        [SerializeField] private float speedResponse = 1.1f;
 
-        // -----------------------------------------------------------------------------------------
-        //  Inspector
-        // -----------------------------------------------------------------------------------------
+        [Header("Depth")]
+        [SerializeField] private float cruiseDepthMin = 11f;
+        [SerializeField] private float cruiseDepthMax = 26f;
+        [SerializeField] private float bedClearance = 3.2f;
 
-        [Header("Scene References")]
-        [Tooltip("Child holding ONLY the meshes. Renderers under it are gated client-side by distance.")]
-        [SerializeField] private Transform visualRoot;
+        [Header("Surfacing")]
+        [Tooltip("Seconds between opportunities to surface, when calm.")]
+        [SerializeField] private float surfaceIntervalMin = 26f;
+        [SerializeField] private float surfaceIntervalMax = 52f;
+        [SerializeField] private float surfaceDurationMin = 6f;
+        [SerializeField] private float surfaceDurationMax = 11f;
 
-        [Header("Roaming")]
-        [Tooltip("Centre of her patrol area, in world space.")]
-        [SerializeField] private Vector3 roamCenter = new Vector3(0f, -10f, 40f);
-        [SerializeField] private float roamRadius = 90f;
-        [Tooltip("How far a NavMesh sample may search for valid lakebed when a point misses.")]
-        [SerializeField] private float navSampleRadius = 12f;
-        [Tooltip("Candidate points evaluated when choosing somewhere to hide.")]
-        [SerializeField] private int hideCandidateSamples = 10;
+        [Header("Network visibility")]
+        [Tooltip("Clients closer than this receive her transform at all.")]
+        [SerializeField] private float visibilityRadius = 165f;
+        [Tooltip("Must exceed visibilityRadius. The gap is the anti-churn hysteresis.")]
+        [SerializeField] private float hideRadius = 205f;
+        [Tooltip("Local render gate — mitigates the host-sees-everything limitation above.")]
+        [SerializeField] private float renderRadius = 150f;
 
-        [Header("Movement")]
-        [SerializeField] private float wanderSpeed = 3.5f;
-        [SerializeField] private float hideSpeed = 1.6f;
-        [SerializeField] private float fleeSpeed = 9f;
-        [SerializeField] private float turnSpeed = 120f;
-        [SerializeField] private float acceleration = 8f;
+        // ---- Replicated ------------------------------------------------------
+        // Only what the CLIENTS need in order to animate her correctly. Threat,
+        // destination and timers stay on the server.
+        private readonly NetworkVariable<byte> _state = new NetworkVariable<byte>((byte)QuarryState.Wandering);
+        private readonly NetworkVariable<float> _swimSpeed = new NetworkVariable<float>(0f);
+        private readonly NetworkVariable<bool> _surfaced = new NetworkVariable<bool>(false);
 
-        [Header("Depth (NavMeshAgent.baseOffset above the lakebed)")]
-        [SerializeField] private float wanderDepthOffset = 6f;
-        [Tooltip("Lower value = hugs the bottom = harder to see and quieter on sonar.")]
-        [SerializeField] private float hideDepthOffset = 1.5f;
-        [SerializeField] private float fleeDepthOffset = 4f;
-        [SerializeField] private float depthChangeSpeed = 2f;
+        // ---- Server-only -----------------------------------------------------
+        private QuarryBrain _brain;
+        private Vector3 _destination;
+        private float _speed;
+        private float _repathTimer;
+        private float _nextSurfaceAt;
+        private float _surfaceUntil;
+        private readonly Vec3[] _hunterScratch = new Vec3[8];
+        private System.Random _rng;
 
-        [Header("Sonar Signature (how loud she is, 0..1)")]
-        [SerializeField] private float wanderSignature = 0.75f;
-        [SerializeField] private float hideSignature = 0.3f;
-        [Tooltip("Fleeing is deliberately the loudest state - running is what gives her away.")]
-        [SerializeField] private float fleeSignature = 1f;
+        // ---- Visual ----------------------------------------------------------
+        private Transform[] _spine = new Transform[0];
+        private Transform[] _neck = new Transform[0];
+        private float _swimPhase;
+        private Renderer[] _renderers = new Renderer[0];
 
-        [Header("Threat Model")]
-        [Tooltip("Boats closer than this raise threat continuously.")]
-        [SerializeField] private float awarenessRadius = 55f;
-        [SerializeField] private float threatDecayPerSecond = 0.16f;
+        public QuarryState State => (QuarryState)_state.Value;
+        public bool IsSurfaced => _surfaced.Value;
 
-        [Header("Transitions (hysteresis prevents state flicker)")]
-        [Range(0f, 1f)][SerializeField] private float hideEnterThreshold = 0.35f;
-        [Range(0f, 1f)][SerializeField] private float hideExitThreshold = 0.15f;
-        [Range(0f, 1f)][SerializeField] private float fleeEnterThreshold = 0.75f;
-        [Range(0f, 1f)][SerializeField] private float fleeExitThreshold = 0.45f;
-        [Tooltip("Minimum time in a state before any transition is considered.")]
-        [SerializeField] private float minStateDuration = 2.5f;
-        [SerializeField] private float maxFleeDuration = 9f;
+        /// <summary>Her acoustic cross-section right now. Read by SonarSet on the server.</summary>
+        public float SonarSignature { get; private set; } = 0.75f;
 
-        [Header("Network Visibility")]
-        [Tooltip("Clients closer than this get Nessie spawned. Keep it comfortably above sonar range.")]
-        [SerializeField] private float visibilityRadius = 160f;
-        [Tooltip("Multiplier on visibilityRadius before hiding again. Stops spawn/despawn churn at the boundary.")]
-        [SerializeField] private float visibilityHysteresis = 1.25f;
-        [SerializeField] private float visibilityUpdateInterval = 0.5f;
-        [Tooltip("Client-side renderer cut-off. Slightly under visibilityRadius so it only bites on the host.")]
-        [SerializeField] private float clientRenderRadius = 150f;
-
-        // -----------------------------------------------------------------------------------------
-        //  Replicated state
-        // -----------------------------------------------------------------------------------------
-
-        /// <summary>
-        /// Server-write, everyone-read. Note this only reaches clients who currently HAVE her
-        /// spawned, so the visibility system doubles as the confidentiality boundary for it.
-        /// </summary>
-        private readonly NetworkVariable<NessieState> _state =
-            new NetworkVariable<NessieState>(NessieState.Wandering);
-
-        public NessieState State => IsSpawned ? _state.Value : NessieState.Wandering;
-
-        // -----------------------------------------------------------------------------------------
-        //  Server-only runtime
-        // -----------------------------------------------------------------------------------------
-
-        private NavMeshAgent _agent;
-
-        private float _threat;                 // 0..1 accumulated alarm.
-        private Vector3 _threatOrigin;         // Where the alarm came from - flee direction source.
-        private bool _hasThreatOrigin;
-        private float _stateEnteredAt;
-        private float _nextRepathTime;
-        private float _nextVisibilityUpdate;
-        private float _stuckTimer;
-        private float _targetDepthOffset;
-
-        private readonly List<Transform> _hunterBuffer = new List<Transform>(8);
-
-        // Reused across every path query. NavMeshPath is a managed wrapper around native memory;
-        // allocating one per repath would produce steady GC pressure for no reason.
-        private readonly NavMeshPath _pathBuffer = new NavMeshPath();
-
-        // Headings tried, in order, when fleeing. Static so the array is shared by all instances.
-        private static readonly float[] FleeFanAngles = { 0f, 30f, -30f, 60f, -60f, 100f, -100f };
-
-        /// <summary>Area mask for NavMesh queries, safe to read before the agent is configured.</summary>
-        private int AreaMask => _agent != null ? _agent.areaMask : NavMesh.AllAreas;
-
-        // Client-side
-        private Renderer[] _renderers = Array.Empty<Renderer>();
-        private bool _renderersVisible = true;
-
-        /// <summary>
-        /// SERVER-ONLY. How strongly she reflects sonar right now, 0..1. Read by <see cref="Sonar"/>.
-        /// Deliberately not replicated: it would leak "she is hiding nearby" to every client.
-        /// </summary>
-        public float SonarSignature
+        /// <summary>Called by NessieBuilder before the prefab is forged.</summary>
+        public void Bind(Transform[] spine, Transform[] neck)
         {
-            get
-            {
-                return _state.Value switch
-                {
-                    NessieState.Hiding => hideSignature,
-                    NessieState.Fleeing => fleeSignature,
-                    _ => wanderSignature
-                };
-            }
+            _spine = spine ?? new Transform[0];
+            _neck = neck ?? new Transform[0];
         }
 
-        // =========================================================================================
-        //  Lifecycle
-        // =========================================================================================
-
-        private void Awake()
-        {
-            _agent = GetComponent<NavMeshAgent>();
-            _renderers = visualRoot != null
-                ? visualRoot.GetComponentsInChildren<Renderer>(true)
-                : GetComponentsInChildren<Renderer>(true);
-        }
+        // ---------------------------------------------------------------------
+        // Lifecycle
+        // ---------------------------------------------------------------------
 
         public override void OnNetworkSpawn()
         {
-            _state.OnValueChanged += HandleStateReplicated;
+            _renderers = GetComponentsInChildren<Renderer>(true);
 
-            if (IsServer)
-            {
-                ServerInstance = this;
+            if (!IsServer) return;
 
-                ConfigureAgentForServer();
+            ServerInstance = this;
+            _brain = new QuarryBrain(QuarryTuning.Default);
+            _rng = new System.Random(System.Environment.TickCount ^ 0x5EA);
 
-                _threat = 0f;
-                _hasThreatOrigin = false;
-                _stateEnteredAt = Time.time;
-                _targetDepthOffset = wanderDepthOffset;
-
-                // Reset explicitly: this prefab is respawned per session and NetworkVariables do not
-                // reset themselves, so a fresh hunt must start from a known state.
-                _state.Value = NessieState.Wandering;
-                EnterState(NessieState.Wandering, force: true);
-
-                // Evaluated by NGO for every client at spawn time AND whenever we call NetworkShow.
-                // Late joiners therefore inherit the correct visibility with no extra work.
-                NetworkObject.CheckObjectVisibility = ShouldBeVisibleTo;
-            }
-            else
-            {
-                // CRITICAL: without this the client-side agent fights NetworkTransform for the
-                // transform and the monster jitters. Clients are pure observers.
-                if (_agent != null) _agent.enabled = false;
-            }
-
-            OnStateChanged?.Invoke(_state.Value);
+            _destination = transform.position;
+            ScheduleNextSurfacing();
+            PickWanderTarget();
         }
 
         public override void OnNetworkDespawn()
         {
-            _state.OnValueChanged -= HandleStateReplicated;
             if (ServerInstance == this) ServerInstance = null;
         }
 
-        /// <summary>base.OnDestroy() is mandatory on a NetworkBehaviour.</summary>
-        public override void OnDestroy()
+        /// <summary>
+        /// Assigned to NetworkObject.CheckObjectVisibility BEFORE spawning, so she is
+        /// never briefly visible to the whole session on the spawn tick.
+        /// </summary>
+        public bool ShouldBeVisibleTo(ulong clientId)
         {
-            if (ServerInstance == this) ServerInstance = null;
-            base.OnDestroy();
+            var net = NetworkManager.Singleton;
+            if (net == null) return true;
+            if (clientId == net.ServerClientId) return true; // cannot hide from the server
+
+            Vector3 watcher;
+            if (!TryGetClientPosition(clientId, out watcher)) return false;
+            return Vector3.Distance(transform.position, watcher) <= visibilityRadius;
         }
 
-        private void HandleStateReplicated(NessieState previous, NessieState current)
-            => OnStateChanged?.Invoke(current);
-
-        private void ConfigureAgentForServer()
-        {
-            if (_agent == null) return;
-
-            _agent.enabled = true;
-            _agent.angularSpeed = turnSpeed;
-            _agent.acceleration = acceleration;
-            _agent.autoBraking = false;      // Keeps the swim continuous instead of stopping at each node.
-            _agent.updateRotation = true;
-            _agent.baseOffset = wanderDepthOffset;
-
-            // GameManager drops her at an approximate point; Warp snaps her onto the lakebed
-            // NavMesh. Without this, SetDestination silently no-ops and she never moves.
-            if (NavMesh.SamplePosition(transform.position, out NavMeshHit hit, navSampleRadius * 4f, AreaMask))
-            {
-                _agent.Warp(hit.position);
-            }
-            else
-            {
-                Debug.LogError("[NessieAI] Could not place Nessie on the lakebed NavMesh. " +
-                               "Check that a NavMeshSurface for her Agent Type is baked and that " +
-                               "GameManager.nessieSpawnCenter is over it.", this);
-            }
-        }
-
-        // =========================================================================================
-        //  Update
-        // =========================================================================================
+        // ---------------------------------------------------------------------
+        // Server simulation
+        // ---------------------------------------------------------------------
 
         private void Update()
         {
-            if (!IsSpawned) return;
-
-            // Runs on every peer, host included - this is what keeps a cheating host from simply
-            // looking at her through the water.
-            UpdateClientRenderGate();
-
-            if (!IsServer) return;
-
             float dt = Time.deltaTime;
+            if (IsServer) ServerStep(dt);
+            Animate(dt);
+            ApplyRenderGate();
+        }
 
-            UpdateThreat(dt);
-            UpdateStateMachine();
-            UpdateDepth(dt);
-            UpdateSteering();
+        private void ServerStep(float dt)
+        {
+            int hunters = GatherHunters();
+            QuarryDecision decision = _brain.Tick(transform.position.ToSim(), _hunterScratch, hunters, dt);
 
-            if (Time.time >= _nextVisibilityUpdate)
+            SonarSignature = decision.Signature;
+            _state.Value = (byte)decision.State;
+
+            if (decision.StateChanged) OnStateEntered(decision);
+            if (decision.WantsNewHide) PickHideTarget();
+
+            UpdateSurfacing(decision, dt);
+
+            _repathTimer -= dt;
+            if (_repathTimer <= 0f || ReachedDestination()) ChooseDestination(decision);
+
+            Swim(decision, dt);
+            UpdateVisibility();
+        }
+
+        private void OnStateEntered(QuarryDecision decision)
+        {
+            switch (decision.State)
             {
-                _nextVisibilityUpdate = Time.time + visibilityUpdateInterval;
-                UpdateNetworkVisibility();
+                case QuarryState.Fleeing:
+                    // Bolt: a long run directly away from whatever spooked her, and no
+                    // surfacing until she has settled again.
+                    PickFleeTarget(decision.AwayFromThreat.ToUnity());
+                    _surfaceUntil = 0f;
+                    ScheduleNextSurfacing();
+                    break;
+
+                case QuarryState.Hiding:
+                    PickHideTarget();
+                    break;
+
+                default:
+                    PickWanderTarget();
+                    break;
             }
         }
 
-        // -----------------------------------------------------------------------------------------
-        //  Threat model
-        // -----------------------------------------------------------------------------------------
-
-        /// <summary>
-        /// Threat decays steadily, but proximity to a boat sets a continuous floor. That means
-        /// simply parking on top of her keeps her agitated, while backing off lets her settle -
-        /// which is the behaviour that makes the hunt readable to players.
-        /// </summary>
-        private void UpdateThreat(float dt)
+        private int GatherHunters()
         {
-            _threat = Mathf.Max(0f, _threat - threatDecayPerSecond * dt);
-
-            CollectHunters(_hunterBuffer);
-
-            float proximityFloor = 0f;
-            float nearestSqr = float.PositiveInfinity;
-            Vector3 nearestPos = _threatOrigin;
-
-            for (int i = 0; i < _hunterBuffer.Count; i++)
+            // The crew are all standing on one boat, so for threat purposes the BOAT is
+            // the hunter. Using individual crew positions would triple-count a full
+            // crew standing together and make a four-player session terrify her.
+            int count = 0;
+            var boat = Vessel.BoatController.Instance;
+            if (boat != null && count < _hunterScratch.Length)
             {
-                Transform hunter = _hunterBuffer[i];
-                if (hunter == null) continue;
-
-                float sqr = (hunter.position - transform.position).sqrMagnitude;
-                if (sqr < nearestSqr)
-                {
-                    nearestSqr = sqr;
-                    nearestPos = hunter.position;
-                }
-
-                float distance = Mathf.Sqrt(sqr);
-                if (distance < awarenessRadius)
-                {
-                    proximityFloor = Mathf.Max(proximityFloor, 1f - (distance / awarenessRadius));
-                }
+                _hunterScratch[count++] = boat.transform.position.ToSim();
             }
-
-            if (proximityFloor > 0f)
-            {
-                _threat = Mathf.Max(_threat, proximityFloor);
-                _threatOrigin = nearestPos;
-                _hasThreatOrigin = true;
-            }
-
-            _threat = Mathf.Clamp01(_threat);
+            return count;
         }
 
-        /// <summary>
-        /// SERVER: called by the sonar system when a sweep washes over her - by a player's tool or
-        /// by the AI companion's. This is the feedback edge that turns detection into evasion:
-        /// finding her is exactly what makes her run.
-        /// </summary>
-        public void NotifyPinged(Vector3 pingOrigin, float strength)
+        private void UpdateSurfacing(QuarryDecision decision, float dt)
         {
-            if (!IsServer) return;
+            float now = Time.time;
 
-            _threat = Mathf.Clamp01(_threat + Mathf.Clamp01(strength));
-            _threatOrigin = pingOrigin;
-            _hasThreatOrigin = true;
-        }
-
-        /// <summary>
-        /// Everything that scares her: every connected player's boat, plus the AI assistant.
-        /// Reading NetworkManager.ConnectedClientsList each tick (N is tiny) avoids the lifetime
-        /// bugs that come with static registries surviving a session restart.
-        /// </summary>
-        private void CollectHunters(List<Transform> buffer)
-        {
-            buffer.Clear();
-
-            var netManager = NetworkManager;
-            if (netManager != null && netManager.IsServer)
+            if (_surfaceUntil > now)
             {
-                foreach (var client in netManager.ConnectedClientsList)
+                // A surfacing is abandoned the moment she is properly alarmed.
+                if (decision.Threat >= _brain.Tuning.HideEnterThreshold)
                 {
-                    if (client?.PlayerObject != null) buffer.Add(client.PlayerObject.transform);
+                    _surfaceUntil = 0f;
+                    ScheduleNextSurfacing();
                 }
             }
+            else if (now >= _nextSurfaceAt
+                     && decision.State == QuarryState.Wandering
+                     && decision.Threat < 0.18f)
+            {
+                // The payoff. She only ever breaks the surface when she believes she is
+                // alone, which is why a patient crew that stops pinging and drifts is
+                // rewarded — and why it is a real decision to stop pinging.
+                _surfaceUntil = now + Mathf.Lerp(surfaceDurationMin, surfaceDurationMax, (float)_rng.NextDouble());
+                ScheduleNextSurfacing();
+            }
 
-            AssistantAI assistant = AssistantAI.ServerInstance;
-            if (assistant != null && assistant.IsSpawned) buffer.Add(assistant.transform);
+            _surfaced.Value = _surfaceUntil > now;
         }
 
-        // -----------------------------------------------------------------------------------------
-        //  State machine
-        // -----------------------------------------------------------------------------------------
-
-        private void UpdateStateMachine()
+        private void ScheduleNextSurfacing()
         {
-            float timeInState = Time.time - _stateEnteredAt;
+            _nextSurfaceAt = Time.time + Mathf.Lerp(surfaceIntervalMin, surfaceIntervalMax, (float)_rng.NextDouble());
+        }
 
-            // A minimum dwell time plus separate enter/exit thresholds gives two independent
-            // guards against oscillation - a monster that flickers between states reads as broken.
-            if (timeInState < minStateDuration) return;
+        private bool ReachedDestination() =>
+            Vector3.Distance(transform.position, _destination) < 6f;
 
-            switch (_state.Value)
+        private void ChooseDestination(QuarryDecision decision)
+        {
+            switch (decision.State)
             {
-                case NessieState.Wandering:
-                    if (_threat >= fleeEnterThreshold) EnterState(NessieState.Fleeing);
-                    else if (_threat >= hideEnterThreshold) EnterState(NessieState.Hiding);
-                    break;
-
-                case NessieState.Hiding:
-                    if (_threat >= fleeEnterThreshold) EnterState(NessieState.Fleeing);
-                    else if (_threat <= hideExitThreshold) EnterState(NessieState.Wandering);
-                    break;
-
-                case NessieState.Fleeing:
-                    // Fleeing always resolves into Hiding, never straight back to a lazy patrol:
-                    // she has just been spooked, so she goes to ground and stays wary.
-                    if (timeInState >= maxFleeDuration || _threat <= fleeExitThreshold)
-                    {
-                        EnterState(NessieState.Hiding);
-                    }
-                    break;
+                case QuarryState.Fleeing: PickFleeTarget(decision.AwayFromThreat.ToUnity()); break;
+                case QuarryState.Hiding: PickHideTarget(); break;
+                default: PickWanderTarget(); break;
             }
         }
 
-        private void EnterState(NessieState next, bool force = false)
+        private void PickWanderTarget()
         {
-            if (!IsServer) return;
-            if (!force && _state.Value == next) return;
-
-            _state.Value = next;   // Server-write NetworkVariable - legal, we are the server.
-            _stateEnteredAt = Time.time;
-            _stuckTimer = 0f;
-            _nextRepathTime = 0f;  // Force an immediate destination choice for the new state.
-
-            switch (next)
-            {
-                case NessieState.Wandering:
-                    if (_agent != null) _agent.speed = wanderSpeed;
-                    _targetDepthOffset = wanderDepthOffset;
-                    break;
-
-                case NessieState.Hiding:
-                    if (_agent != null) _agent.speed = hideSpeed;
-                    _targetDepthOffset = hideDepthOffset;
-                    break;
-
-                case NessieState.Fleeing:
-                    if (_agent != null) _agent.speed = fleeSpeed;
-                    _targetDepthOffset = fleeDepthOffset;
-                    break;
-            }
+            Vector3 point = RandomBasinPoint(0.82f);
+            point.y = -Mathf.Lerp(cruiseDepthMin, cruiseDepthMax, (float)_rng.NextDouble());
+            _destination = ClampToWater(point);
+            _repathTimer = 12f + (float)_rng.NextDouble() * 9f;
         }
 
-        // -----------------------------------------------------------------------------------------
-        //  Navigation
-        // -----------------------------------------------------------------------------------------
-
-        private void UpdateSteering()
+        private void PickHideTarget()
         {
-            // isOnNavMesh guards every agent call. Touching SetDestination on an off-mesh agent
-            // logs an error every single frame and is the number-one source of NavMesh spam.
-            if (_agent == null || !_agent.enabled || !_agent.isOnNavMesh) return;
+            // Go to ground: a short move to the nearest deep, dark part of the bed. She
+            // does not travel far while hiding — that is what makes a methodical search
+            // pattern beat a frantic one.
+            Vector3 here = transform.position;
+            float angle = (float)_rng.NextDouble() * Mathf.PI * 2f;
+            float distance = 18f + (float)_rng.NextDouble() * 26f;
 
-            bool arrived = !_agent.pathPending && _agent.remainingDistance <= _agent.stoppingDistance + 0.5f;
+            Vector3 point = here + new Vector3(Mathf.Cos(angle), 0f, Mathf.Sin(angle)) * distance;
+            point.y = LochBuilder.SampleGround(point.x, point.z) + bedClearance;
 
-            // Stuck detection: an agent that is trying to move but is not moving needs a new plan.
-            if (!arrived && _agent.velocity.sqrMagnitude < 0.05f) _stuckTimer += Time.deltaTime;
-            else _stuckTimer = 0f;
-
-            bool needsNewDestination = arrived
-                                    || _stuckTimer > 1.5f
-                                    || _agent.pathStatus == NavMeshPathStatus.PathInvalid
-                                    || Time.time >= _nextRepathTime;
-
-            if (!needsNewDestination) return;
-
-            _stuckTimer = 0f;
-
-            switch (_state.Value)
-            {
-                case NessieState.Wandering:
-                    _nextRepathTime = Time.time + 6f;
-                    SetDestinationSafely(PickWanderPoint());
-                    break;
-
-                case NessieState.Hiding:
-                    _nextRepathTime = Time.time + 4f;
-                    SetDestinationSafely(PickHidePoint());
-                    break;
-
-                case NessieState.Fleeing:
-                    // Repath often while fleeing so she keeps reacting to a pursuing boat.
-                    _nextRepathTime = Time.time + 1.5f;
-                    SetDestinationSafely(PickFleePoint());
-                    break;
-            }
+            _destination = ClampToWater(point);
+            _repathTimer = 7f + (float)_rng.NextDouble() * 6f;
         }
 
-        /// <summary>
-        /// Commits a destination only if a COMPLETE path exists. A partial path would walk her into
-        /// a dead end and strand her against geometry.
-        /// </summary>
-        private void SetDestinationSafely(Vector3 worldPoint)
+        private void PickFleeTarget(Vector3 away)
         {
-            if (_agent == null || !_agent.isOnNavMesh) return;
-
-            if (!NavMesh.SamplePosition(worldPoint, out NavMeshHit hit, navSampleRadius, AreaMask))
-            {
-                return; // Nothing navigable nearby; the next repath tick will try again.
-            }
-
-            if (_agent.CalculatePath(hit.position, _pathBuffer)
-                && _pathBuffer.status == NavMeshPathStatus.PathComplete)
-            {
-                _agent.SetPath(_pathBuffer);
-            }
-        }
-
-        private Vector3 PickWanderPoint()
-        {
-            Vector2 disc = UnityEngine.Random.insideUnitCircle * roamRadius;
-            return new Vector3(roamCenter.x + disc.x, roamCenter.y, roamCenter.z + disc.y);
-        }
-
-        /// <summary>
-        /// Samples several lakebed points and keeps the one that maximises distance from every
-        /// hunter. Deliberately a scored search rather than "run to the far corner" - she should
-        /// look like she is picking cover, not fleeing to a fixed safe spot the players can learn.
-        /// </summary>
-        private Vector3 PickHidePoint()
-        {
-            CollectHunters(_hunterBuffer);
-
-            Vector3 best = transform.position;
-            float bestScore = float.NegativeInfinity;
-
-            for (int i = 0; i < hideCandidateSamples; i++)
-            {
-                Vector2 disc = UnityEngine.Random.insideUnitCircle * roamRadius;
-                Vector3 candidate = new Vector3(roamCenter.x + disc.x, roamCenter.y, roamCenter.z + disc.y);
-
-                if (!NavMesh.SamplePosition(candidate, out NavMeshHit hit, navSampleRadius, AreaMask))
-                    continue;
-
-                // Score = distance to the nearest hunter, with a mild penalty for swimming far.
-                float nearest = float.PositiveInfinity;
-                for (int h = 0; h < _hunterBuffer.Count; h++)
-                {
-                    if (_hunterBuffer[h] == null) continue;
-                    nearest = Mathf.Min(nearest, Vector3.Distance(hit.position, _hunterBuffer[h].position));
-                }
-
-                if (float.IsPositiveInfinity(nearest)) nearest = roamRadius; // No hunters: all points equal.
-
-                float travelPenalty = Vector3.Distance(transform.position, hit.position) * 0.25f;
-                float score = nearest - travelPenalty;
-
-                if (score > bestScore)
-                {
-                    bestScore = score;
-                    best = hit.position;
-                }
-            }
-
-            return best;
-        }
-
-        /// <summary>
-        /// Straight away from the threat, with fan-out fallbacks. Open water is rarely a perfect
-        /// escape lane, so if the direct heading is off-mesh we try progressively wider angles
-        /// rather than giving up and stalling in place.
-        /// </summary>
-        private Vector3 PickFleePoint()
-        {
-            Vector3 away = _hasThreatOrigin
-                ? (transform.position - _threatOrigin)
-                : UnityEngine.Random.insideUnitSphere;
-
+            if (away.sqrMagnitude < 0.01f) away = Random.insideUnitSphere;
             away.y = 0f;
-            if (away.sqrMagnitude < 0.01f) away = transform.forward;
-            away.Normalize();
+            away = away.normalized;
 
-            const float fleeDistance = 45f;
+            Vector3 point = transform.position + away * 130f;
+            // Down as well as away — depth is her best cover and the sonar's falloff
+            // does not care about it, but the bow watch's eyes very much do.
+            point.y = Mathf.Min(-cruiseDepthMax, LochBuilder.SampleGround(point.x, point.z) + bedClearance + 6f);
 
-            for (int i = 0; i < FleeFanAngles.Length; i++)
+            _destination = ClampToWater(point);
+            _repathTimer = 3.5f;
+        }
+
+        private Vector3 RandomBasinPoint(float extent)
+        {
+            float angle = (float)_rng.NextDouble() * Mathf.PI * 2f;
+            float radius = Mathf.Sqrt((float)_rng.NextDouble()) * extent; // uniform over the ellipse
+            return new Vector3(
+                Mathf.Cos(angle) * radius * LochBuilder.BasinRadiusX,
+                0f,
+                Mathf.Sin(angle) * radius * LochBuilder.BasinRadiusZ);
+        }
+
+        /// <summary>Keep a point inside the basin, off the bed, and under the surface.</summary>
+        private Vector3 ClampToWater(Vector3 point)
+        {
+            float nx = point.x / (LochBuilder.BasinRadiusX * 0.9f);
+            float nz = point.z / (LochBuilder.BasinRadiusZ * 0.9f);
+            float d = nx * nx + nz * nz;
+            if (d > 1f)
             {
-                Vector3 direction = Quaternion.Euler(0f, FleeFanAngles[i], 0f) * away;
-                Vector3 candidate = transform.position + direction * fleeDistance;
-
-                if (NavMesh.SamplePosition(candidate, out NavMeshHit hit, navSampleRadius, AreaMask))
-                {
-                    return hit.position;
-                }
+                float scale = 1f / Mathf.Sqrt(d);
+                point.x *= scale;
+                point.z *= scale;
             }
 
-            // Cornered against the shore: fall back to normal cover-seeking.
-            return PickHidePoint();
+            float bed = LochBuilder.SampleGround(point.x, point.z) + bedClearance;
+            point.y = Mathf.Clamp(point.y, bed, -1.4f);
+            return point;
         }
 
-        /// <summary>Eases the swim depth so state changes read as diving/surfacing, not snapping.</summary>
-        private void UpdateDepth(float dt)
+        private void Swim(QuarryDecision decision, float dt)
         {
-            if (_agent == null || !_agent.enabled) return;
-            _agent.baseOffset = Mathf.MoveTowards(_agent.baseOffset, _targetDepthOffset, depthChangeSpeed * dt);
-        }
+            _speed = Mathf.MoveTowards(_speed, decision.DesiredSpeed, speedResponse * decision.DesiredSpeed * dt + 0.4f * dt);
+            _swimSpeed.Value = _speed;
 
-        // -----------------------------------------------------------------------------------------
-        //  Network visibility
-        // -----------------------------------------------------------------------------------------
-
-        /// <summary>
-        /// Evaluated by NGO at spawn and on NetworkShow. Distance is measured to the client's boat,
-        /// so a client with no boat yet (still loading) simply does not receive her.
-        /// </summary>
-        private bool ShouldBeVisibleTo(ulong clientId)
-        {
-            var netManager = NetworkManager;
-            if (netManager == null) return false;
-
-            // The host's own client cannot be hidden from - NGO throws if we try.
-            if (clientId == netManager.ServerClientId) return true;
-
-            if (!netManager.ConnectedClients.TryGetValue(clientId, out var client)) return false;
-            if (client.PlayerObject == null) return false;
-
-            float distance = Vector3.Distance(client.PlayerObject.transform.position, transform.position);
-            return distance <= visibilityRadius;
-        }
-
-        /// <summary>
-        /// Periodically shows/hides her per client as boats move. CheckObjectVisibility alone only
-        /// runs at spawn time, so dynamic visibility has to be driven explicitly.
-        /// </summary>
-        private void UpdateNetworkVisibility()
-        {
-            var netManager = NetworkManager;
-            if (netManager == null || !netManager.IsServer || !IsSpawned) return;
-
-            float hideRadius = visibilityRadius * Mathf.Max(1f, visibilityHysteresis);
-
-            foreach (var client in netManager.ConnectedClientsList)
+            Vector3 target = _destination;
+            if (_surfaced.Value)
             {
-                if (client == null) continue;
+                // Rise until the humps and neck are clear of the water, holding station
+                // roughly where she is rather than continuing her transit.
+                target = transform.position + transform.forward * 8f;
+                target.y = -0.9f;
+            }
 
-                ulong clientId = client.ClientId;
+            Vector3 toTarget = target - transform.position;
+            if (toTarget.sqrMagnitude < 0.01f) return;
 
-                // Never attempt to hide from the server's own client: NGO raises
-                // VisibilityChangeException, and on a host that client is the host player.
-                if (clientId == netManager.ServerClientId) continue;
+            // Yaw and pitch are steered separately and rate-limited. A fourteen-metre
+            // animal that can turn on a sixpence looks like a fish in a bowl; the
+            // limits are what give her mass.
+            float desiredYaw = Mathf.Atan2(toTarget.x, toTarget.z) * Mathf.Rad2Deg;
+            float flat = new Vector2(toTarget.x, toTarget.z).magnitude;
+            float desiredPitch = Mathf.Clamp(-Mathf.Atan2(toTarget.y, Mathf.Max(0.1f, flat)) * Mathf.Rad2Deg,
+                                             -maxPitchDegrees, maxPitchDegrees);
 
-                bool currentlyVisible = NetworkObject.IsNetworkVisibleTo(clientId);
+            Vector3 euler = transform.eulerAngles;
+            float yaw = Mathf.MoveTowardsAngle(euler.y, desiredYaw, turnRateDegrees * dt);
+            float pitch = Mathf.MoveTowardsAngle(euler.x, desiredPitch, pitchRateDegrees * dt);
+            transform.rotation = Quaternion.Euler(pitch, yaw, 0f);
 
-                if (client.PlayerObject == null)
-                {
-                    if (currentlyVisible) NetworkObject.NetworkHide(clientId);
-                    continue;
-                }
+            Vector3 next = transform.position + transform.forward * (_speed * dt);
 
-                float distance = Vector3.Distance(client.PlayerObject.transform.position, transform.position);
+            // Hard floor and ceiling. The clamp is applied to the RESULT rather than
+            // the destination because a steep pitch can otherwise drive her through
+            // the bed between waypoints.
+            float bed = LochBuilder.SampleGround(next.x, next.z) + bedClearance * 0.6f;
+            float ceiling = _surfaced.Value ? 1.6f : -1.2f;
+            next.y = Mathf.Clamp(next.y, bed, ceiling);
 
-                // Asymmetric thresholds: show at R, hide at R * hysteresis. Without the gap a boat
-                // idling on the boundary would spawn and despawn her every half second.
-                if (!currentlyVisible && distance <= visibilityRadius) NetworkObject.NetworkShow(clientId);
-                else if (currentlyVisible && distance > hideRadius) NetworkObject.NetworkHide(clientId);
+            if (!LochBuilder.InsideBasin(next.x, next.z, 12f))
+            {
+                // Bounced off the shore: turn her back toward open water rather than
+                // letting her grind along the margin.
+                next = transform.position;
+                _destination = ClampToWater(RandomBasinPoint(0.5f) + Vector3.down * 18f);
+                _repathTimer = 4f;
+            }
+
+            transform.position = next;
+        }
+
+        // ---------------------------------------------------------------------
+        // Provocation — called by SonarSet on the server
+        // ---------------------------------------------------------------------
+
+        public void HearPing(float distance, float aggression)
+        {
+            if (!IsServer || _brain == null) return;
+            _brain.HearPing(distance, aggression);
+        }
+
+        public void Provoke(float amount)
+        {
+            if (!IsServer || _brain == null) return;
+            _brain.Provoke(amount);
+        }
+
+        // ---------------------------------------------------------------------
+        // Visibility
+        // ---------------------------------------------------------------------
+
+        private float _visibilityTimer;
+
+        private void UpdateVisibility()
+        {
+            // Four times a second is plenty: the boat's top speed is 9 m/s and the
+            // hysteresis band is 40 m wide, so nothing can cross it between checks.
+            _visibilityTimer -= Time.deltaTime;
+            if (_visibilityTimer > 0f) return;
+            _visibilityTimer = 0.25f;
+
+            var net = NetworkManager.Singleton;
+            if (net == null || NetworkObject == null || !NetworkObject.IsSpawned) return;
+
+            foreach (ulong clientId in net.ConnectedClientsIds)
+            {
+                if (clientId == net.ServerClientId) continue;
+                if (!TryGetClientPosition(clientId, out Vector3 watcher)) continue;
+
+                float distance = Vector3.Distance(transform.position, watcher);
+                bool visible = NetworkObject.IsNetworkVisibleTo(clientId);
+
+                if (!visible && distance <= visibilityRadius) NetworkObject.NetworkShow(clientId);
+                else if (visible && distance > hideRadius) NetworkObject.NetworkHide(clientId);
             }
         }
 
-        /// <summary>
-        /// Client-side renderer gate. For remote clients this is a near no-op (they only have her
-        /// spawned when they are already in range); its real job is the HOST, which NGO cannot hide
-        /// objects from. Toggling Renderer.enabled - not the GameObject - keeps the NavMeshAgent,
-        /// colliders and NetworkTransform running untouched.
-        /// </summary>
-        private void UpdateClientRenderGate()
+        private static bool TryGetClientPosition(ulong clientId, out Vector3 position)
         {
-            PlayerController localPlayer = PlayerController.LocalPlayer;
+            position = Vector3.zero;
+            var net = NetworkManager.Singleton;
+            if (net == null || !net.ConnectedClients.TryGetValue(clientId, out NetworkClient client)) return false;
 
-            bool shouldRender = localPlayer != null
-                && Vector3.Distance(localPlayer.transform.position, transform.position) <= clientRenderRadius;
+            var playerObject = client.PlayerObject;
+            if (playerObject == null) return false;
 
-            if (shouldRender == _renderersVisible) return;
-            _renderersVisible = shouldRender;
+            position = playerObject.transform.position;
+            return true;
+        }
 
+        /// <summary>
+        /// Local render gate. Purely visual, and purely a mitigation for the host case
+        /// described at the top of this file — the host's client cannot be NetworkHidden
+        /// from, so at least stop drawing her.
+        /// </summary>
+        private void ApplyRenderGate()
+        {
+            Camera view = Camera.main;
+            if (view == null) return;
+
+            bool shouldRender = Vector3.Distance(transform.position, view.transform.position) <= renderRadius;
             for (int i = 0; i < _renderers.Length; i++)
             {
-                if (_renderers[i] != null) _renderers[i].enabled = shouldRender;
+                if (_renderers[i] != null && _renderers[i].enabled != shouldRender) _renderers[i].enabled = shouldRender;
             }
         }
 
-        // -----------------------------------------------------------------------------------------
-        //  Editor aids
-        // -----------------------------------------------------------------------------------------
+        // ---------------------------------------------------------------------
+        // Animation — runs on every peer, from replicated speed
+        // ---------------------------------------------------------------------
 
-        private void OnDrawGizmosSelected()
+        private void Animate(float dt)
         {
-            Gizmos.color = new Color(0.2f, 0.8f, 1f, 0.35f);
-            Gizmos.DrawWireSphere(roamCenter, roamRadius);
+            float speed = _swimSpeed.Value;
+            float effort = Mathf.Clamp01(speed / 9f);
 
-            Gizmos.color = new Color(1f, 0.5f, 0.1f, 0.5f);
-            Gizmos.DrawWireSphere(transform.position, awarenessRadius);
+            // Stroke rate and amplitude both rise with effort: a fleeing animal
+            // thrashes, a hiding one barely moves. This is the only tell you get at a
+            // distance about what she is doing.
+            _swimPhase += dt * (0.7f + effort * 3.4f);
+            float amplitude = Mathf.Lerp(3.5f, 13f, effort);
 
-            Gizmos.color = new Color(1f, 1f, 1f, 0.15f);
-            Gizmos.DrawWireSphere(transform.position, visibilityRadius);
+            for (int i = 0; i < _spine.Length; i++)
+            {
+                // The phase offset per segment is what makes it a travelling wave down
+                // the body rather than the whole animal wagging.
+                float wave = Mathf.Sin(_swimPhase * 2f - i * 0.62f);
+                float taper = Mathf.Lerp(0.35f, 1.4f, i / Mathf.Max(1f, _spine.Length - 1f));
+                _spine[i].localRotation = Quaternion.Euler(0f, wave * amplitude * taper, wave * 2.2f);
+            }
+
+            for (int i = 0; i < _neck.Length; i++)
+            {
+                float wave = Mathf.Sin(_swimPhase * 1.3f - i * 0.4f);
+                _neck[i].localRotation = Quaternion.Euler(-11f + wave * 2.4f, wave * 3.2f, 0f);
+            }
         }
     }
 }
