@@ -23,17 +23,18 @@ git clone <this repo>
    the Default Render Pipeline. This is the one manual step, and it is unavoidable: a
    pipeline asset cannot be authored outside the Editor, and without one URP renders
    everything magenta.
-4. Check Project Settings → Player → Other Settings → **Active Input Handling** is
-   `Both` or `Input Manager (Old)`. The code uses `UnityEngine.Input`, which throws on
-   the first frame if only the new Input System is active.
-5. Press **Play**.
+4. Press **Play**.
+
+Active Input Handling can stay on **Input System Package (New)**, which is the Unity 6
+default. The game reads input through the Input System's device API and never touches
+the legacy `Input` class.
 
 ### Dropping the scripts into an existing project
 
 If you already have a Unity 6 URP project, copy **`Assets/Scripts/` only** — not
 `ProjectSettings/`, not `Packages/manifest.json`, not the scene. Then install
-`com.unity.netcode.gameobjects` from the Package Manager, check Active Input Handling
-as above, and press Play. The pipeline asset is already set up for you by the URP template.
+`com.unity.netcode.gameobjects` from the Package Manager and press Play. The URP
+template already provides the pipeline asset and the Input System.
 
 Apart from the pipeline asset there is nothing to assemble: no scene to build, no
 prefab to wire, no NavMesh to bake, no inspector reference to assign. **The game boots
@@ -113,7 +114,7 @@ Flagged here because they are the ones most worth arguing with.
 | URP, not HDRP | Unity is retiring the built-in pipeline, so URP is the right target. HDRP is heavier than this needs and narrows platform support. Materials are set up by property name with `HasProperty` guards, so the code still runs under the built-in pipeline if it has to — see `MeshKit`. |
 | World-space uGUI name tags, not `TextMesh` | `TextMesh` draws through the built-in `GUI/Text Shader`, which URP does not ship, so every name tag would render magenta. |
 | No NavMesh | A NavMesh is baked in world space and **the deck moves**, so agents cannot path on it. The monster also swims in open 3D, which a NavMesh does not describe. Both use steering. |
-| Legacy input, not the Input System | The Input System needs an `.inputactions` asset. This project ships no authored assets. |
+| Input System device API, not an `.inputactions` asset | `Keyboard.current` / `Mouse.current` need no authored asset, so the project stays clone-and-play while staying on the supported input path. The cost is no rebinding and no gamepad; both call for an actions asset, and every call site already goes through `Boot/Controls`. |
 | Nobody can fall off the boat | Removes a whole family of moving-platform bugs for no real loss — the launch is railed all round. |
 | Contacts are shown to the whole crew | The scope is physical hardware in the wheelhouse. Crew pressure comes from the stations, not from hoarding the display. |
 

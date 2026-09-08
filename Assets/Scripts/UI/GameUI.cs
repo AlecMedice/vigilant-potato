@@ -18,6 +18,7 @@ using LochNess.Player;
 using LochNess.Vessel;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.InputSystem.UI;
 using UnityEngine.UI;
 
 namespace LochNess.UI
@@ -103,7 +104,13 @@ namespace LochNess.UI
             var go = new GameObject("Event System");
             go.transform.SetParent(transform, false);
             go.AddComponent<EventSystem>();
-            go.AddComponent<StandaloneInputModule>();
+
+            // InputSystemUIInputModule, not StandaloneInputModule: the latter reads the
+            // legacy Input class and does nothing when that backend is switched off.
+            // A module added in code has no actions assigned — the Editor's menu item
+            // does that part — so ask it for the defaults, or no button ever clicks.
+            var module = go.AddComponent<InputSystemUIInputModule>();
+            module.AssignDefaultActions();
         }
 
         private void BuildMenuCamera()

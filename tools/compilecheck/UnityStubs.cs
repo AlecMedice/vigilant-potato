@@ -419,19 +419,7 @@ namespace UnityEngine
     public sealed class BoxCollider : Collider { public Vector3 center; public Vector3 size; }
     public sealed class SphereCollider : Collider { public Vector3 center; public float radius; }
 
-    // ---- Input and platform ------------------------------------------------
-    public static class Input
-    {
-        public static bool GetKey(KeyCode key) => false;
-        public static bool GetKeyDown(KeyCode key) => false;
-        public static bool GetKeyUp(KeyCode key) => false;
-        public static bool GetMouseButton(int button) => false;
-        public static bool GetMouseButtonDown(int button) => false;
-        public static float GetAxis(string name) => 0f;
-        public static float GetAxisRaw(string name) => 0f;
-        public static Vector3 mousePosition => default;
-    }
-
+    // ---- Platform ----------------------------------------------------------
     public enum KeyCode
     {
         None = 0, Backspace, Tab, Return, Escape, Space,
@@ -626,5 +614,53 @@ namespace UnityEngine.UI
         public enum ContentType { Standard, IntegerNumber, DecimalNumber, Alphanumeric, Name, EmailAddress, Password, Pin, Custom }
         public class SubmitEvent : UnityEvent<string> { }
         public class OnChangeEvent : UnityEvent<string> { }
+    }
+}
+
+namespace UnityEngine.InputSystem
+{
+    public class InputControl { }
+
+    public class ButtonControl : InputControl
+    {
+        public bool isPressed => false;
+        public bool wasPressedThisFrame => false;
+        public bool wasReleasedThisFrame => false;
+    }
+
+    public class Vector2Control : InputControl
+    {
+        public Vector2 ReadValue() => default;
+    }
+
+    public class InputDevice { }
+
+    public class Keyboard : InputDevice
+    {
+        public static Keyboard current => default;
+        public ButtonControl aKey, bKey, cKey, dKey, eKey, fKey, gKey, hKey, iKey, jKey, kKey, lKey, mKey;
+        public ButtonControl nKey, oKey, pKey, qKey, rKey, sKey, tKey, uKey, vKey, wKey, xKey, yKey, zKey;
+        public ButtonControl spaceKey, escapeKey, enterKey, tabKey, leftShiftKey, rightShiftKey;
+        public ButtonControl leftCtrlKey, rightCtrlKey, leftAltKey, rightAltKey;
+    }
+
+    public class Mouse : InputDevice
+    {
+        public static Mouse current => default;
+        public Vector2Control delta;
+        public Vector2Control position;
+        public Vector2Control scroll;
+        public ButtonControl leftButton, rightButton, middleButton;
+    }
+
+    public class Gamepad : InputDevice { public static Gamepad current => default; }
+}
+
+namespace UnityEngine.InputSystem.UI
+{
+    public class InputSystemUIInputModule : UnityEngine.EventSystems.BaseInputModule
+    {
+        public void AssignDefaultActions() { }
+        public void UnassignActions() { }
     }
 }

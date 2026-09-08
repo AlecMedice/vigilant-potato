@@ -17,8 +17,8 @@
 // — see that file for why a CharacterController is the wrong tool on a deck doing
 // nine knots.
 //
-// INPUT uses the legacy Input class deliberately: the new Input System needs an
-// .inputactions asset, and this project ships no authored assets.
+// INPUT goes through Boot/Controls, which uses the Input System's device API —
+// no .inputactions asset, so the project still needs no authored assets.
 // -----------------------------------------------------------------------------
 
 using System;
@@ -210,7 +210,7 @@ namespace LochNess.Player
                 return;
             }
 
-            if (Input.GetKeyDown(KeyCode.Escape)) SetCursorLocked(!_cursorLocked);
+            if (Controls.CancelPressed) SetCursorLocked(!_cursorLocked);
 
             SyncStationFromServer();
             UpdateLook(dt);
@@ -239,8 +239,9 @@ namespace LochNess.Player
             if (!_cursorLocked) return;
 
             float sensitivity = GameSettings.MouseSensitivity;
-            float mx = Input.GetAxisRaw("Mouse X") * sensitivity;
-            float my = Input.GetAxisRaw("Mouse Y") * sensitivity * (GameSettings.InvertY ? 1f : -1f);
+            Vector2 look = Controls.LookDelta;
+            float mx = look.x * sensitivity;
+            float my = look.y * sensitivity * (GameSettings.InvertY ? 1f : -1f);
 
             _yaw += mx;
             _pitch = Mathf.Clamp(_pitch + my, minPitch, maxPitch);
@@ -261,9 +262,9 @@ namespace LochNess.Player
 
         private void UpdateWalking(float dt)
         {
-            float forward = (Input.GetKey(KeyCode.W) ? 1f : 0f) - (Input.GetKey(KeyCode.S) ? 1f : 0f);
-            float strafe = (Input.GetKey(KeyCode.D) ? 1f : 0f) - (Input.GetKey(KeyCode.A) ? 1f : 0f);
-            bool sprinting = Input.GetKey(KeyCode.LeftShift);
+            float forward = Controls.Throttle;
+            float strafe = Controls.Strafe;
+            bool sprinting = Controls.Sprint;
 
             var wish = new Vector2(strafe, forward);
             if (wish.sqrMagnitude > 1f) wish.Normalize();
@@ -334,11 +335,11 @@ namespace LochNess.Player
                     break;
 
                 case StationRole.Sonar:
-                    if (Input.GetKeyDown(KeyCode.Space)) SonarSet.Instance?.PingServerRpc();
+                    if (Controls.ActionPressed) SonarSet.Instance?.PingServerRpc();
                     break;
 
                 case StationRole.Watch:
-                    if (Input.GetKeyDown(KeyCode.Space)) SonarSet.Instance?.ReportVisualServerRpc();
+                    if (Controls.ActionPressed) SonarSet.Instance?.ReportVisualServerRpc();
                     break;
             }
         }
@@ -348,8 +349,8 @@ namespace LochNess.Player
 
         private void DriveBoat(BoatController boat)
         {
-            float throttle = (Input.GetKey(KeyCode.W) ? 1f : 0f) - (Input.GetKey(KeyCode.S) ? 1f : 0f);
-            float rudder = (Input.GetKey(KeyCode.D) ? 1f : 0f) - (Input.GetKey(KeyCode.A) ? 1f : 0f);
+            float throttle = Controls.Throttle;
+            float rudder = Controls.Strafe;
 
             // Send only on change. Helm input is held for seconds at a time, so an
             // unconditional per-frame RPC would be almost entirely redundant traffic.
@@ -368,7 +369,7 @@ namespace LochNess.Player
             if (_station.HasValue)
             {
                 OnPrompt?.Invoke(PromptForHeldStation());
-                if (Input.GetKeyDown(KeyCode.E) || Input.GetKeyDown(KeyCode.Q))
+                if (Controls.InteractPressed || Controls.StandDownPressed)
                 {
                     ClearHelmCache();
                     boat.ReleaseStationServerRpc();
@@ -389,7 +390,7 @@ namespace LochNess.Player
             }
 
             OnPrompt?.Invoke($"[E] {nearest.Verb}");
-            if (Input.GetKeyDown(KeyCode.E)) boat.ClaimStationServerRpc(nearest.Role);
+            if (Controls.InteractPressed) boat.ClaimStationServerRpc(nearest.Role);
         }
 
         private string PromptForHeldStation()
