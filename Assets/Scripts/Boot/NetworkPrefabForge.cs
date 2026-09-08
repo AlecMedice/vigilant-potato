@@ -35,7 +35,8 @@ namespace LochNess.Boot
     {
         private static readonly List<GameObject> Templates = new List<GameObject>();
         private static FieldInfo _hashField;
-        private static bool _hashFieldResolved;
+        private static PropertyInfo _hashProperty;
+        private static bool _hashMemberResolved;
 
         /// <summary>Deterministic id shared by every peer. Same string in, same uint out.</summary>
         public static uint HashFor(string id) => SimMath.Fnv1a(id);
@@ -91,17 +92,37 @@ namespace LochNess.Boot
 
         private static bool AssignStableHash(NetworkObject netObject, uint hash)
         {
-            if (!_hashFieldResolved)
+            if (!_hashMemberResolved)
             {
-                _hashFieldResolved = true;
+                _hashMemberResolved = true;
                 const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
+
                 _hashField = typeof(NetworkObject).GetField("GlobalObjectIdHash", flags)
                              ?? typeof(NetworkObject).GetField("m_GlobalObjectIdHash", flags);
+
+                if (_hashField == null)
+                {
+                    // Netcode may expose it as a property instead. Only useful if it is
+                    // writable — a getter alone cannot help us.
+                    PropertyInfo candidate = typeof(NetworkObject).GetProperty("GlobalObjectIdHash", flags)
+                                             ?? typeof(NetworkObject).GetProperty("PrefabIdHash", flags);
+                    if (candidate != null && candidate.CanWrite) _hashProperty = candidate;
+                }
             }
 
-            if (_hashField == null) return false;
-            _hashField.SetValue(netObject, hash);
-            return true;
+            if (_hashField != null)
+            {
+                _hashField.SetValue(netObject, hash);
+                return true;
+            }
+
+            if (_hashProperty != null)
+            {
+                _hashProperty.SetValue(netObject, hash);
+                return true;
+            }
+
+            return false;
         }
     }
 }

@@ -132,7 +132,7 @@ namespace LochNess.AI
         {
             var net = NetworkManager.Singleton;
             if (net == null) return true;
-            if (clientId == net.ServerClientId) return true; // cannot hide from the server
+            if (clientId == NetworkManager.ServerClientId) return true; // cannot hide from the server
 
             Vector3 watcher;
             if (!TryGetClientPosition(clientId, out watcher)) return false;
@@ -405,7 +405,7 @@ namespace LochNess.AI
 
             foreach (ulong clientId in net.ConnectedClientsIds)
             {
-                if (clientId == net.ServerClientId) continue;
+                if (clientId == NetworkManager.ServerClientId) continue;
                 if (!TryGetClientPosition(clientId, out Vector3 watcher)) continue;
 
                 float distance = Vector3.Distance(transform.position, watcher);

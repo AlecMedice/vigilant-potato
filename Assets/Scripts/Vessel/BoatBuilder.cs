@@ -43,8 +43,7 @@ namespace LochNess.Vessel
             var stations = BuildStations(root.transform);
             var wake = BuildWake(root.transform);
 
-            var netObject = root.AddComponent<NetworkObject>();
-            netObject.AlwaysReplicateAsRoot = true;
+            root.AddComponent<NetworkObject>();
 
             // Server-authoritative: the vessel's motion is simulated once, on the
             // host, and replicated. The driver only sends helm input. This costs the

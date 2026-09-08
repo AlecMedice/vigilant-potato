@@ -107,7 +107,6 @@ namespace Unity.Netcode
         public ulong NetworkObjectId => 0;
         public ulong OwnerClientId => 0;
         public bool IsSpawned => false;
-        public bool AlwaysReplicateAsRoot;
         public VisibilityDelegate CheckObjectVisibility;
 
         public void Spawn(bool destroyWithScene = true) { }
@@ -194,7 +193,7 @@ namespace Unity.Netcode
         public bool IsListening => false;
         public bool IsConnectedClient => false;
         public ulong LocalClientId => 0;
-        public ulong ServerClientId => 0;
+        public static ulong ServerClientId => 0;
         public string DisconnectReason => string.Empty;
         public NetworkTime ServerTime => default;
         public NetworkTime LocalTime => default;
