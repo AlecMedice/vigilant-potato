@@ -121,11 +121,21 @@ namespace LochNess.Boot
                 net = go.AddComponent<NetworkManager>();
             }
 
-            if (net == null || net.NetworkConfig == null)
+            if (net == null)
             {
-                Debug.LogError("[Boot] Netcode refused to initialise. Nothing networked will work.");
-                return net;
+                Debug.LogError("[Boot] Netcode destroyed the NetworkManager as it was created. " +
+                               "Nothing networked will work.");
+                return null;
             }
+
+            // A NetworkManager created by AddComponent comes up with a NULL NetworkConfig.
+            //
+            // NetworkConfig is a serialized field, and what fills it in is the Editor
+            // deserialising a NetworkManager that was placed in a scene. Nothing
+            // deserialises one built at runtime, so it is simply never assigned — and
+            // the first thing that touches it dies. Constructing one restores the same
+            // defaults the Inspector would have shown.
+            if (net.NetworkConfig == null) net.NetworkConfig = new NetworkConfig();
 
             var transport = net.GetComponent<UnityTransport>();
             if (transport == null) transport = net.gameObject.AddComponent<UnityTransport>();
