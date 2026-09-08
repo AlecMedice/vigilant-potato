@@ -70,6 +70,8 @@ namespace LochNess.Boot
             gameObject.AddComponent<GameUI>();
 
             // 4. Prefabs, forged from code and registered by stable hash.
+            if (net == null || net.NetworkConfig == null) return;
+
             try
             {
                 GameObject crew = NetworkPrefabForge.Register(net, "lochness.crew", CrewBuilder.Build());
@@ -94,13 +96,39 @@ namespace LochNess.Boot
             }
         }
 
+        /// <summary>
+        /// Create the NetworkManager.
+        ///
+        /// IT MUST BE A ROOT GAMEOBJECT. Netcode explicitly refuses to run nested —
+        /// it checks the parent in Awake, logs "NetworkManager cannot be nested" and
+        /// destroys itself. The component AddComponent hands back is then already
+        /// destroyed, so it reads as null and the next line dies with a
+        /// NullReferenceException that says nothing about the real cause.
+        ///
+        /// So this is the one part of the boot hierarchy that is NOT parented under
+        /// the Loch Ness root, and it is kept alive on its own.
+        /// </summary>
         private NetworkManager BuildNetworkManager()
         {
-            var go = new GameObject("Network Manager");
-            go.transform.SetParent(transform, false);
+            // Reuse one that already exists — a NetworkManager the user placed in
+            // their own scene, or one surviving a previous play session.
+            NetworkManager net = NetworkManager.Singleton;
 
-            var net = go.AddComponent<NetworkManager>();
-            var transport = go.AddComponent<UnityTransport>();
+            if (net == null)
+            {
+                var go = new GameObject("Network Manager"); // root: see above
+                DontDestroyOnLoad(go);
+                net = go.AddComponent<NetworkManager>();
+            }
+
+            if (net == null || net.NetworkConfig == null)
+            {
+                Debug.LogError("[Boot] Netcode refused to initialise. Nothing networked will work.");
+                return net;
+            }
+
+            var transport = net.GetComponent<UnityTransport>();
+            if (transport == null) transport = net.gameObject.AddComponent<UnityTransport>();
 
             net.NetworkConfig.NetworkTransport = transport;
             net.NetworkConfig.ConnectionApproval = true;
