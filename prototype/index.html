@@ -1,0 +1,1281 @@
+<title>Loch Ness Sonar Trials</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500&display=swap">
+
+<style>
+/* ---------------------------------------------------------------------------
+   Loch Ness Sonar Trials — a playable port of the vertical slice's core loop.
+   Single-theme by intent: this is an instrument in a dark wheelhouse, so every
+   colour is painted explicitly and nothing is inherited from the host ground.
+   --------------------------------------------------------------------------- */
+:root {
+  --abyss:      #0B1416;
+  --abyss-deep: #070E10;
+  --hull:       #16232A;
+  --hull-hi:    #1E2F38;
+  --rule:       #2A3F49;
+  --brass:      #C8912F;
+  --brass-dim:  #7A5A20;
+  --phosphor:   #7FD4C1;
+  --phosphor-d: #2E6A5E;
+  --alarm:      #D9553B;
+  --mist:       #9FB3B8;
+  --mist-dim:   #647C83;
+  --paper:      #E8E4D9;
+
+  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --disp: "Antonio", "Oswald", ui-sans-serif, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--abyss);
+  color: var(--paper);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Faint horizon wash so the console does not sit on flat black. */
+.console {
+  min-height: 100vh;
+  padding: 18px clamp(12px, 2.4vw, 30px) 26px;
+  background:
+    radial-gradient(120% 70% at 50% 0%, #122028 0%, var(--abyss) 58%, var(--abyss-deep) 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* ------------------------------- header ---------------------------------- */
+
+.brief {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px 26px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--rule);
+}
+.brief-id { display: flex; flex-direction: column; gap: 2px; }
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  color: var(--brass);
+}
+h1 {
+  font-family: var(--disp);
+  font-weight: 700;
+  font-size: clamp(27px, 4.4vw, 44px);
+  line-height: .96;
+  letter-spacing: .012em;
+  margin: 0;
+  text-wrap: balance;
+  color: var(--paper);
+}
+.subtitle {
+  margin: 4px 0 0;
+  max-width: 60ch;
+  font-size: 13px;
+  color: var(--mist);
+}
+.subtitle b { color: var(--phosphor); font-weight: 500; }
+
+.gauges { display: flex; gap: 9px; flex-wrap: wrap; }
+.gauge {
+  min-width: 92px;
+  padding: 7px 12px 8px;
+  background: var(--hull);
+  border: 1px solid var(--rule);
+  border-top: 2px solid var(--brass-dim);
+}
+.gauge-k {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--mist-dim);
+}
+.gauge-v {
+  font-family: var(--mono);
+  font-size: 21px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--paper);
+  line-height: 1.15;
+}
+.gauge-v.lit  { color: var(--phosphor); }
+.gauge-v.warn { color: var(--alarm); }
+
+/* -------------------------------- body ----------------------------------- */
+
+main {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(310px, .95fr);
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 940px) { main { grid-template-columns: minmax(0, 1fr); } }
+
+.scope-bay {
+  position: relative;
+  background:
+    radial-gradient(closest-side, #0E1B1F 0%, var(--abyss-deep) 100%);
+  border: 1px solid var(--rule);
+  padding: 12px;
+}
+.scope-wrap { position: relative; width: 100%; aspect-ratio: 1 / 1; }
+canvas { display: block; width: 100%; height: 100%; }
+
+/* Corner tags on the scope, the way real survey gear labels its display. */
+.scope-tag {
+  position: absolute;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+  color: var(--mist-dim);
+  pointer-events: none;
+}
+.scope-tag.tl { top: 14px; left: 16px; }
+.scope-tag.tr { top: 14px; right: 16px; text-align: right; }
+.scope-tag.bl { bottom: 14px; left: 16px; }
+.scope-tag em { font-style: normal; color: var(--phosphor); }
+
+/* Prompt / end-of-run overlay */
+.veil {
+  position: absolute;
+  inset: 12px;
+  display: grid;
+  place-content: center;
+  gap: 10px;
+  text-align: center;
+  padding: 26px;
+  background: rgba(7, 14, 16, .84);
+  backdrop-filter: blur(2px);
+}
+.veil[hidden] { display: none; }
+.veil h2 {
+  font-family: var(--disp);
+  font-size: clamp(26px, 4vw, 40px);
+  font-weight: 700;
+  margin: 0;
+  line-height: 1;
+  color: var(--paper);
+}
+.veil h2.win { color: var(--phosphor); }
+.veil h2.loss { color: var(--brass); }
+.veil p { margin: 0; max-width: 46ch; color: var(--mist); font-size: 13px; }
+
+/* -------------------------------- rack ----------------------------------- */
+
+.rack { display: flex; flex-direction: column; gap: 12px; }
+
+.module { background: var(--hull); border: 1px solid var(--rule); }
+.module > h3 {
+  margin: 0;
+  padding: 8px 13px 7px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .19em;
+  text-transform: uppercase;
+  color: var(--brass);
+  border-bottom: 1px solid var(--rule);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+.module > h3 span { color: var(--mist-dim); letter-spacing: .1em; }
+.module-body { padding: 11px 13px 13px; }
+
+/* contact log */
+.log { font-family: var(--mono); font-size: 11.5px; }
+.log-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  gap: 10px;
+  padding: 4px 0;
+  border-bottom: 1px dotted var(--rule);
+  font-variant-numeric: tabular-nums;
+  color: var(--mist);
+}
+.log-row:last-child { border-bottom: 0; }
+.log-row .cls { color: var(--paper); letter-spacing: .05em; }
+.log-row.bio .cls { color: var(--alarm); font-weight: 600; }
+.log-row.conf { background: rgba(217, 85, 59, .11); }
+.log-empty { color: var(--mist-dim); font-family: var(--mono); font-size: 11.5px; }
+
+.radio {
+  margin-top: 10px;
+  padding: 7px 10px;
+  min-height: 34px;
+  background: var(--abyss-deep);
+  border-left: 2px solid var(--phosphor-d);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--phosphor);
+}
+.radio:empty::before { content: "— radio quiet —"; color: var(--mist-dim); }
+
+/* telemetry */
+.tele { display: grid; grid-template-columns: auto 1fr; gap: 7px 12px; align-items: center; }
+.tele dt {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+  color: var(--mist-dim);
+}
+.tele dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--paper);
+}
+.state-pill {
+  display: inline-block;
+  padding: 1px 8px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  border: 1px solid currentColor;
+}
+.st-wandering { color: var(--phosphor); }
+.st-hiding    { color: var(--mist); }
+.st-fleeing   { color: var(--alarm); }
+
+.meter {
+  display: block;
+  width: 100%;
+  height: 8px;
+  background: var(--abyss-deep);
+  border: 1px solid var(--rule);
+  position: relative;
+  overflow: hidden;
+}
+.meter i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  display: block;
+  min-width: 2px;
+  background: var(--brass);
+}
+.meter i.hot { background: var(--alarm); }
+
+/* tuning */
+.tune-group + .tune-group { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rule); }
+.tune-group > h4 {
+  margin: 0 0 7px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: .17em;
+  text-transform: uppercase;
+  color: var(--mist-dim);
+}
+.tune {
+  display: grid;
+  grid-template-columns: 1fr 62px;
+  gap: 1px 10px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+/* The rack must not out-run the scope beside it. */
+.module-body.scrolly {
+  max-height: 384px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule) transparent;
+}
+.tune label {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--mist);
+  overflow-wrap: anywhere;
+}
+.tune output {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--paper);
+}
+.tune output.changed { color: var(--brass); font-weight: 600; }
+.tune input[type=range] { grid-column: 1 / -1; width: 100%; margin: 0; accent-color: var(--brass); height: 13px; }
+.tune-group + .tune-group { margin-top: 9px; padding-top: 8px; }
+
+/* ------------------------------- controls -------------------------------- */
+
+.helm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 22px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 14px;
+  background: var(--hull);
+  border: 1px solid var(--rule);
+}
+.keys { display: flex; flex-wrap: wrap; gap: 7px 16px; font-size: 12px; color: var(--mist); }
+.keys span { display: inline-flex; align-items: center; gap: 6px; }
+kbd {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  padding: 2px 6px 3px;
+  background: var(--abyss-deep);
+  border: 1px solid var(--rule);
+  border-bottom-width: 2px;
+  color: var(--paper);
+}
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+button {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .11em;
+  text-transform: uppercase;
+  padding: 8px 15px;
+  color: var(--paper);
+  background: var(--hull-hi);
+  border: 1px solid var(--rule);
+  cursor: pointer;
+}
+button:hover { border-color: var(--brass-dim); color: var(--brass); }
+button[aria-pressed="true"] { background: var(--brass); border-color: var(--brass); color: #17120A; }
+button.primary { background: var(--brass); border-color: var(--brass); color: #17120A; }
+button.primary:hover { background: #DCA23A; color: #17120A; }
+button:focus-visible, input:focus-visible {
+  outline: 2px solid var(--phosphor);
+  outline-offset: 2px;
+}
+
+.footnote {
+  font-size: 12px;
+  color: var(--mist-dim);
+  max-width: 88ch;
+  margin: 0;
+}
+.footnote code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--mist);
+}
+.footnote a { color: var(--brass); }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+}
+</style>
+
+<div class="console">
+
+  <header class="brief">
+    <div class="brief-id">
+      <div class="eyebrow">Vertical slice · core loop trial</div>
+      <h1>Loch Ness Sonar Trials</h1>
+      <p class="subtitle">
+        Every constant below is the real value from the C&nbsp;# vertical slice. Sweep the loch,
+        read the anomalies, and log <b>3 confirmed contacts</b> before the light goes.
+        Active sonar is the only way to find her — and the only thing that tells her you are there.
+      </p>
+    </div>
+    <div class="gauges">
+      <div class="gauge"><div class="gauge-k">Time left</div><div class="gauge-v" id="g-time">8:00</div></div>
+      <div class="gauge"><div class="gauge-k">Confirmed</div><div class="gauge-v" id="g-conf">0 / 3</div></div>
+      <div class="gauge"><div class="gauge-k">Sonar</div><div class="gauge-v lit" id="g-sonar">READY</div></div>
+      <div class="gauge"><div class="gauge-k">Speed</div><div class="gauge-v" id="g-speed">0.0</div></div>
+    </div>
+  </header>
+
+  <main>
+    <section class="scope-bay">
+      <div class="scope-wrap">
+        <canvas id="scope" aria-label="Sonar plan-position indicator"></canvas>
+        <div class="scope-tag tl">PPI · North up<br><em id="tag-range">Range 140 m</em></div>
+        <div class="scope-tag tr">Heading <em id="tag-hdg">000</em><br>Depth <em id="tag-depth">— m</em></div>
+        <div class="scope-tag bl">Rings 30 m</div>
+        <div class="veil" id="veil">
+          <h2 id="veil-title">Stand by to sweep</h2>
+          <p id="veil-body">
+            <kbd>W</kbd> <kbd>S</kbd> throttle · <kbd>A</kbd> <kbd>D</kbd> rudder ·
+            <kbd>Space</kbd> ping. The rudder is weak at low speed — a drifting hull barely steers.
+          </p>
+          <div><button class="primary" id="veil-btn">Begin the trial</button></div>
+        </div>
+      </div>
+    </section>
+
+    <aside class="rack">
+
+      <section class="module">
+        <h3>Contact log <span id="log-stamp">no sweep yet</span></h3>
+        <div class="module-body">
+          <div class="log" id="log"><div class="log-empty">Press PING to sweep the loch.</div></div>
+          <div class="radio" id="radio"></div>
+        </div>
+      </section>
+
+      <section class="module">
+        <h3>Quarry telemetry <span>NessieAI</span></h3>
+        <div class="module-body">
+          <dl class="tele">
+            <dt>State</dt><dd><span class="state-pill st-wandering" id="t-state">Wandering</span></dd>
+            <dt>Threat</dt><dd><span class="meter"><i id="t-threat" style="width:0%"></i></span></dd>
+            <dt>Signature</dt><dd id="t-sig">0.75</dd>
+            <dt>Depth</dt><dd id="t-depth">6.0 m</dd>
+            <dt>Bearing</dt><dd id="t-brg">—</dd>
+          </dl>
+        </div>
+      </section>
+
+      <section class="module">
+        <h3>Tuning <span>live · inspector names</span></h3>
+        <div class="module-body scrolly">
+          <div id="tuning"></div>
+        </div>
+        <div class="actions" style="padding:10px 13px 12px;border-top:1px solid var(--rule)">
+          <button id="btn-copy">Copy changed values</button>
+          <button id="btn-reset-tune">Reset</button>
+        </div>
+      </section>
+
+    </aside>
+  </main>
+
+  <footer class="helm">
+    <div class="keys">
+      <span><kbd>W</kbd><kbd>S</kbd> throttle</span>
+      <span><kbd>A</kbd><kbd>D</kbd> rudder</span>
+      <span><kbd>Space</kbd> ping</span>
+      <span><kbd>T</kbd> truth overlay</span>
+      <span><kbd>R</kbd> restart</span>
+    </div>
+    <div class="actions">
+      <button id="btn-ping" class="primary">Ping</button>
+      <button id="btn-truth" aria-pressed="false">Truth overlay</button>
+      <button id="btn-sound" aria-pressed="false">Sound</button>
+      <button id="btn-restart">Restart</button>
+    </div>
+  </footer>
+
+  <p class="footnote">
+    Ported 1:1 from <code>NessieAI.cs</code>, <code>PlayerController.cs</code> and
+    <code>AssistantAI.cs</code>: the same threat model, the same hysteresis and dwell guards, the
+    same sonar falloff, clarity jitter, range error and decoy generation. Two honest substitutions —
+    navigation is direct steering inside an elliptical basin rather than NavMesh pathing, and the
+    scope is 2-D so Nessie's depth is a readout rather than a dimension. Networking is absent by
+    design: this is the server's simulation, which is the only copy that ever existed.
+  </p>
+</div>
+
+<script>
+"use strict";
+
+/* ===========================================================================
+   TUNING — field names and defaults lifted verbatim from the Unity inspector.
+   =========================================================================== */
+const DEFAULTS = {
+  // NessieAI
+  wanderSpeed: 3.5, hideSpeed: 1.6, fleeSpeed: 9,
+  wanderSignature: 0.75, hideSignature: 0.3, fleeSignature: 1,
+  awarenessRadius: 55, threatDecayPerSecond: 0.16,
+  hideEnterThreshold: 0.35, hideExitThreshold: 0.15,
+  fleeEnterThreshold: 0.75, fleeExitThreshold: 0.45,
+  minStateDuration: 2.5, maxFleeDuration: 9, roamRadius: 90,
+  // PlayerController
+  maxForwardSpeed: 9, maxReverseSpeed: 3, acceleration: 6, passiveDrag: 3,
+  turnRateDegrees: 55, fullRudderSpeed: 4, stationaryRudder: 0.25,
+  sonarRange: 120, sonarCooldown: 3, confirmClarity: 0.65, confirmRange: 60,
+  pingAggression: 0.55,
+  // AssistantAI
+  followDistance: 18, followSideOffset: 10, assistPingInterval: 6,
+  reportClarityThreshold: 0.35, assistPingAggression: 0.3,
+  // GameManager
+  huntDurationSeconds: 480, targetSightings: 3
+};
+
+const TUNE_UI = [
+  ["NessieAI — behaviour", [
+    ["wanderSpeed", 0.5, 10, 0.1], ["hideSpeed", 0.2, 8, 0.1], ["fleeSpeed", 2, 18, 0.1],
+    ["awarenessRadius", 10, 140, 1], ["threatDecayPerSecond", 0.02, 1, 0.01],
+    ["hideEnterThreshold", 0, 1, 0.01], ["fleeEnterThreshold", 0, 1, 0.01],
+    ["minStateDuration", 0, 10, 0.1], ["maxFleeDuration", 1, 30, 0.5], ["roamRadius", 30, 240, 5]
+  ]],
+  ["NessieAI — signature", [
+    ["wanderSignature", 0, 1, 0.01], ["hideSignature", 0, 1, 0.01], ["fleeSignature", 0, 1, 0.01]
+  ]],
+  ["PlayerController — sonar", [
+    ["sonarRange", 40, 260, 5], ["sonarCooldown", 0.4, 10, 0.1],
+    ["confirmClarity", 0.1, 1, 0.01], ["confirmRange", 10, 160, 5], ["pingAggression", 0, 1, 0.01]
+  ]],
+  ["PlayerController — hull", [
+    ["maxForwardSpeed", 2, 22, 0.5], ["acceleration", 1, 20, 0.5],
+    ["turnRateDegrees", 10, 140, 1], ["fullRudderSpeed", 0.5, 12, 0.1]
+  ]],
+  ["AssistantAI", [
+    ["followDistance", 5, 60, 1], ["assistPingInterval", 1, 20, 0.5],
+    ["reportClarityThreshold", 0, 1, 0.01]
+  ]],
+  ["GameManager", [
+    ["huntDurationSeconds", 60, 900, 30], ["targetSightings", 1, 8, 1]
+  ]]
+];
+
+const T = { ...DEFAULTS };
+
+/* ===========================================================================
+   Maths helpers — direct equivalents of the UnityEngine.Mathf calls used.
+   =========================================================================== */
+const clamp01  = v => v < 0 ? 0 : v > 1 ? 1 : v;
+const clamp    = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp     = (a, b, t) => a + (b - a) * t;
+const moveTo   = (a, b, d) => Math.abs(b - a) <= d ? b : a + Math.sign(b - a) * d;
+const dist     = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+/** World bearing, 0..360 clockwise from +Z — matches Sonar.BearingOf. */
+const bearingOf = (dx, dz) => { const d = Math.atan2(dx, dz) * 180 / Math.PI; return d < 0 ? d + 360 : d; };
+
+/* The loch: an elongated basin, stand-in for the baked NavMesh. */
+const LOCH = { rx: 265, rz: 150 };
+const insideLoch = (x, z, pad = 0) =>
+  (x * x) / ((LOCH.rx - pad) ** 2) + (z * z) / ((LOCH.rz - pad) ** 2) <= 1;
+
+/** Nearest point inside the basin — the stand-in for NavMesh.SamplePosition. */
+function clampToLoch(p, pad = 6) {
+  if (insideLoch(p.x, p.z, pad)) return p;
+  const k = Math.hypot(p.x / (LOCH.rx - pad), p.z / (LOCH.rz - pad));
+  return { x: p.x / k, z: p.z / k };
+}
+function randomPointInLoch(radius, center = { x: 0, z: 0 }) {
+  for (let i = 0; i < 24; i++) {
+    const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * radius;
+    const p = { x: center.x + Math.cos(a) * r, z: center.z + Math.sin(a) * r };
+    if (insideLoch(p.x, p.z, 12)) return p;
+  }
+  return { x: 0, z: 0 };
+}
+
+/* ===========================================================================
+   SONAR — port of the static Sonar.Resolve in PlayerController.cs.
+   =========================================================================== */
+const KIND = { BIOLOGICAL: "Biological", FISH: "Fish shoal", WRECK: "Wreckage", THERMO: "Thermocline" };
+
+function resolvePing(origin, range) {
+  const results = [];
+  let nessieClarity = 0, nessieDistance = Infinity;
+
+  // --- the real target -----------------------------------------------------
+  const dx = G.nessie.x - origin.x, dz = G.nessie.z - origin.z;
+  const d = Math.hypot(dx, dz);
+  if (d <= range) {
+    let falloff = 1 - clamp01(d / range);
+    falloff *= falloff;                                  // quadratic: the far third is murky
+    let clarity = clamp01(falloff * nessieSignature());
+    clarity = clamp01(clarity * (0.85 + 0.3 * Math.random()));
+
+    if (clarity > 0.05) {
+      nessieClarity = clarity;
+      nessieDistance = d;
+      results.push({
+        kind: KIND.BIOLOGICAL,
+        bearing: bearingOf(dx, dz),
+        // Range error scales with uncertainty — a weak contact is genuinely vague.
+        range: d * (1 + (Math.random() - 0.5) * 0.2 * (1 - clarity)),
+        clarity,
+        x: G.nessie.x, z: G.nessie.z
+      });
+    }
+  }
+
+  // --- decoys --------------------------------------------------------------
+  // Without clutter the tool degenerates into a compass. Decoys cap out below
+  // confirmClarity, so they can mislead but can never hand you a false win.
+  const decoys = 1 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < decoys; i++) {
+    const dRange = range * (0.15 + 0.8 * Math.random());
+    const dFall = 1 - clamp01(dRange / range);
+    const kind = [KIND.FISH, KIND.WRECK, KIND.THERMO][Math.floor(Math.random() * 3)];
+    const clarity = clamp01(dFall * (0.25 + 0.35 * Math.random()));
+    const brg = Math.random() * 360, rad = brg * Math.PI / 180;
+    results.push({
+      kind, bearing: brg, range: dRange, clarity,
+      x: origin.x + Math.sin(rad) * dRange,
+      z: origin.z + Math.cos(rad) * dRange
+    });
+  }
+  return { results, nessieClarity, nessieDistance };
+}
+
+/* ===========================================================================
+   GAME STATE
+   =========================================================================== */
+let G, blips, running = false, ended = false, lastT = 0;
+
+function nessieSignature() {
+  return G.nessie.state === "Hiding" ? T.hideSignature
+       : G.nessie.state === "Fleeing" ? T.fleeSignature
+       : T.wanderSignature;
+}
+
+function newGame() {
+  G = {
+    clock: T.huntDurationSeconds,
+    sightings: 0,
+    sweeps: 0,
+    player: { x: 0, z: -95, heading: 12, speed: 0, nextPing: 0 },
+    nessie: {
+      x: 60, z: 55, heading: 0, speed: 0,
+      state: "Wandering", stateAt: 0, threat: 0,
+      threatOrigin: null, target: null, depth: 6, targetDepth: 6
+    },
+    assistant: {
+      x: 16, z: -108, heading: 0, speed: 0,
+      state: "Following", nextPing: 3, target: null,
+      investigateAt: 0, nextRadio: 0
+    },
+    t: 0, radio: "", radioUntil: 0
+  };
+  blips = [];
+  ended = false;
+  renderLog([]);
+  el.logStamp.textContent = "no sweep yet";
+  el.radio.textContent = "";
+}
+
+/* ===========================================================================
+   NESSIE — port of the state machine, threat model and steering.
+   =========================================================================== */
+function updateNessie(dt) {
+  const n = G.nessie;
+
+  /* --- threat: decays steadily, but proximity sets a continuous floor ----- */
+  n.threat = Math.max(0, n.threat - T.threatDecayPerSecond * dt);
+
+  const hunters = [G.player, G.assistant];
+  let floor = 0, nearest = Infinity, nearestPos = null;
+  for (const h of hunters) {
+    const d = dist(h, n);
+    if (d < nearest) { nearest = d; nearestPos = { x: h.x, z: h.z }; }
+    if (d < T.awarenessRadius) floor = Math.max(floor, 1 - d / T.awarenessRadius);
+  }
+  if (floor > 0) { n.threat = Math.max(n.threat, floor); n.threatOrigin = nearestPos; }
+  n.threat = clamp01(n.threat);
+
+  /* --- transitions: dwell guard + separate enter/exit thresholds ---------- */
+  const inState = G.t - n.stateAt;
+  if (inState >= T.minStateDuration) {
+    if (n.state === "Wandering") {
+      if (n.threat >= T.fleeEnterThreshold) enterState("Fleeing");
+      else if (n.threat >= T.hideEnterThreshold) enterState("Hiding");
+    } else if (n.state === "Hiding") {
+      if (n.threat >= T.fleeEnterThreshold) enterState("Fleeing");
+      else if (n.threat <= T.hideExitThreshold) enterState("Wandering");
+    } else if (n.state === "Fleeing") {
+      // Fleeing always resolves into Hiding — she has just been spooked.
+      if (inState >= T.maxFleeDuration || n.threat <= T.fleeExitThreshold) enterState("Hiding");
+    }
+  }
+
+  /* --- steering ----------------------------------------------------------- */
+  const speed = n.state === "Fleeing" ? T.fleeSpeed : n.state === "Hiding" ? T.hideSpeed : T.wanderSpeed;
+  if (!n.target || dist(n, n.target) < 8) n.target = pickTarget();
+
+  steerToward(n, n.target, speed, 120, dt);
+  n.depth = moveTo(n.depth, n.targetDepth, 2 * dt);   // depthChangeSpeed = 2
+}
+
+function enterState(next) {
+  const n = G.nessie;
+  if (n.state === next) return;
+  n.state = next;
+  n.stateAt = G.t;
+  n.target = null;                                     // force an immediate re-plan
+  n.targetDepth = next === "Hiding" ? 1.5 : next === "Fleeing" ? 4 : 6;
+}
+
+function pickTarget() {
+  const n = G.nessie;
+
+  if (n.state === "Fleeing") {
+    // Straight away from the threat, with fan-out fallbacks.
+    let ax = 0, az = 0;
+    if (n.threatOrigin) { ax = n.x - n.threatOrigin.x; az = n.z - n.threatOrigin.z; }
+    const len = Math.hypot(ax, az) || 1;
+    ax /= len; az /= len;
+    for (const deg of [0, 30, -30, 60, -60, 100, -100]) {
+      const r = deg * Math.PI / 180;
+      const px = n.x + (ax * Math.cos(r) - az * Math.sin(r)) * 45;
+      const pz = n.z + (ax * Math.sin(r) + az * Math.cos(r)) * 45;
+      if (insideLoch(px, pz, 14)) return { x: px, z: pz };
+    }
+    return clampToLoch({ x: n.x + ax * 45, z: n.z + az * 45 }, 14);
+  }
+
+  if (n.state === "Hiding") {
+    // Scored search over 10 candidates: maximise distance from every hunter,
+    // with a mild penalty for swimming far. Not a fixed safe spot to memorise.
+    let best = null, bestScore = -Infinity;
+    for (let i = 0; i < 10; i++) {
+      const c = randomPointInLoch(T.roamRadius);
+      let near = Infinity;
+      for (const h of [G.player, G.assistant]) near = Math.min(near, dist(c, h));
+      const score = near - dist(n, c) * 0.25;
+      if (score > bestScore) { bestScore = score; best = c; }
+    }
+    return best;
+  }
+
+  return randomPointInLoch(T.roamRadius);
+}
+
+/** Shared heading-and-speed steering, standing in for NavMeshAgent motion. */
+function steerToward(a, target, speed, turnRate, dt) {
+  const dx = target.x - a.x, dz = target.z - a.z;
+  const want = bearingOf(dx, dz);
+  let delta = ((want - a.heading + 540) % 360) - 180;
+  a.heading = (a.heading + clamp(delta, -turnRate * dt, turnRate * dt) + 360) % 360;
+  a.speed = moveTo(a.speed, speed, 8 * dt);
+
+  const r = a.heading * Math.PI / 180;
+  const nx = a.x + Math.sin(r) * a.speed * dt;
+  const nz = a.z + Math.cos(r) * a.speed * dt;
+  const p = clampToLoch({ x: nx, z: nz }, 6);
+  a.x = p.x; a.z = p.z;
+}
+
+/* ===========================================================================
+   PLAYER — port of ApplyHullMotion. Throttle, rudder authority, astern rudder.
+   =========================================================================== */
+function updatePlayer(dt) {
+  const p = G.player;
+  const throttle = (keys.has("w") || keys.has("arrowup") ? 1 : 0) - (keys.has("s") || keys.has("arrowdown") ? 1 : 0);
+  const steer    = (keys.has("d") || keys.has("arrowright") ? 1 : 0) - (keys.has("a") || keys.has("arrowleft") ? 1 : 0);
+
+  const target = throttle >= 0 ? throttle * T.maxForwardSpeed : throttle * T.maxReverseSpeed;
+  const rate = throttle === 0 ? T.passiveDrag : T.acceleration;
+  p.speed = moveTo(p.speed, target, rate * dt);
+
+  // Rudder authority scales with water flowing over it: a drifting boat barely steers.
+  const flow = clamp01(Math.abs(p.speed) / Math.max(0.01, T.fullRudderSpeed));
+  const rudder = lerp(T.stationaryRudder, 1, flow);
+  const dir = p.speed < -0.05 ? -1 : 1;                // astern, the rudder reverses
+  p.heading = (p.heading + steer * T.turnRateDegrees * rudder * dir * dt + 360) % 360;
+
+  const r = p.heading * Math.PI / 180;
+  const np = clampToLoch({ x: p.x + Math.sin(r) * p.speed * dt, z: p.z + Math.cos(r) * p.speed * dt }, 5);
+  p.x = np.x; p.z = np.z;
+}
+
+/* ===========================================================================
+   SONAR ACTION — the server-side half of RequestSonarPingServerRpc.
+   =========================================================================== */
+function ping() {
+  if (!running || ended) return;
+  const p = G.player;
+  if (G.t < p.nextPing) return;                        // authoritative cooldown
+  p.nextPing = G.t + T.sonarCooldown;
+  G.sweeps++;
+
+  const { results, nessieClarity, nessieDistance } = resolvePing(p, T.sonarRange);
+
+  // Active sonar always agitates her, whether or not it resolved a usable contact.
+  G.nessie.threat = clamp01(G.nessie.threat + clamp01(T.pingAggression * Math.max(0.2, nessieClarity)));
+  G.nessie.threatOrigin = { x: p.x, z: p.z };
+
+  let confirmed = false;
+  if (nessieClarity >= T.confirmClarity && nessieDistance <= T.confirmRange) {
+    G.sightings++;
+    confirmed = true;
+    if (G.sightings >= T.targetSightings) return finish(true);
+  }
+
+  for (const c of results) blips.push({ ...c, born: G.t });
+  renderLog(results, confirmed);
+  el.logStamp.textContent = `sweep ${String(G.sweeps).padStart(3, "0")}`;
+  sweepFlash = 1;
+  playPing(520, 0.5);
+}
+
+/* ===========================================================================
+   ASSISTANT — station keeping, autonomous sweeps, radio reports.
+   Reports contacts; never scores them. The companion is a sensor, not autopilot.
+   =========================================================================== */
+function updateAssistant(dt) {
+  const a = G.assistant, p = G.player;
+  const gap = dist(a, p);
+
+  if (a.state !== "Regrouping" && gap > 90) a.state = "Regrouping";
+  else if (a.state === "Regrouping" && gap <= 35) a.state = "Following";
+
+  if (a.state === "Investigating" && (G.t - a.investigateAt > 25 || (a.target && dist(a, a.target) < 12))) {
+    a.state = "Following";
+    a.target = null;
+    radio("Nothing on the surface here. Returning to station.");
+  }
+
+  if (a.state === "Regrouping") {
+    steerToward(a, p, 11, 140, dt);
+  } else if (a.state === "Investigating" && a.target) {
+    steerToward(a, a.target, 8, 140, dt);
+  } else {
+    // Station off the player's quarter.
+    const r = p.heading * Math.PI / 180;
+    const fx = Math.sin(r), fz = Math.cos(r);
+    const station = clampToLoch({
+      x: p.x - fx * T.followDistance + fz * T.followSideOffset,
+      z: p.z - fz * T.followDistance - fx * T.followSideOffset
+    }, 8);
+    const d = dist(a, station);
+    a.state = d < 4 ? "Sweeping" : "Following";
+    if (d > 2) steerToward(a, station, 8, 140, dt);
+    else a.speed = moveTo(a.speed, 0, 10 * dt);
+  }
+
+  // Autonomous sweep, on a slower cadence than a human can ping.
+  if (a.state !== "Regrouping" && G.t >= a.nextPing) {
+    a.nextPing = G.t + T.assistPingInterval;
+    const { results, nessieClarity } = resolvePing(a, 110);
+    G.nessie.threat = clamp01(G.nessie.threat + clamp01(T.assistPingAggression * Math.max(0.2, nessieClarity)));
+    G.nessie.threatOrigin = { x: a.x, z: a.z };
+    playPing(760, 0.22);
+
+    const bio = results.filter(c => c.kind === KIND.BIOLOGICAL).sort((x, y) => y.clarity - x.clarity)[0];
+    if (bio && nessieClarity >= T.reportClarityThreshold) {
+      const rad = bio.bearing * Math.PI / 180;
+      a.target = clampToLoch({ x: a.x + Math.sin(rad) * bio.range, z: a.z + Math.cos(rad) * bio.range }, 8);
+      a.state = "Investigating";
+      a.investigateAt = G.t;
+      radio(`Contact! Bearing ${String(Math.round(bio.bearing)).padStart(3, "0")}, range ${Math.round(bio.range)} m.`);
+    }
+  }
+}
+
+function radio(msg) {
+  if (G.t < G.assistant.nextRadio) return;
+  G.assistant.nextRadio = G.t + 8;                     // radioCooldown
+  el.radio.textContent = "[Crew] " + msg;
+  G.radioUntil = G.t + 7;
+}
+
+/* ===========================================================================
+   RENDER — plan-position indicator, north up, own ship at centre.
+   =========================================================================== */
+const cv = document.getElementById("scope");
+const ctx = cv.getContext("2d");
+const SCOPE_RANGE = 140;
+let sweepAngle = 0, sweepFlash = 0, showTruth = false, R = 300, cxp = 300, cyp = 300;
+
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const box = cv.getBoundingClientRect();
+  cv.width = Math.max(1, Math.round(box.width * dpr));
+  cv.height = Math.max(1, Math.round(box.height * dpr));
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  cxp = box.width / 2; cyp = box.height / 2;
+  R = Math.min(box.width, box.height) / 2 - 10;
+}
+new ResizeObserver(resize).observe(cv);
+
+/** World → scope pixels. North up, own ship centred. */
+function toScope(x, z) {
+  const s = R / SCOPE_RANGE;
+  return { px: cxp + (x - G.player.x) * s, py: cyp - (z - G.player.z) * s };
+}
+
+function draw() {
+  const w = cxp * 2, h = cyp * 2;
+  ctx.clearRect(0, 0, w, h);
+
+  // scope ground
+  ctx.save();
+  ctx.beginPath(); ctx.arc(cxp, cyp, R, 0, Math.PI * 2); ctx.clip();
+  const grd = ctx.createRadialGradient(cxp, cyp, 0, cxp, cyp, R);
+  grd.addColorStop(0, "#0E1E22"); grd.addColorStop(1, "#081215");
+  ctx.fillStyle = grd; ctx.fillRect(0, 0, w, h);
+
+  // shoreline of the basin
+  ctx.strokeStyle = "#2A3F49"; ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let i = 0; i <= 96; i++) {
+    const a = (i / 96) * Math.PI * 2;
+    const q = toScope(Math.cos(a) * LOCH.rx, Math.sin(a) * LOCH.rz);
+    i ? ctx.lineTo(q.px, q.py) : ctx.moveTo(q.px, q.py);
+  }
+  ctx.stroke();
+  ctx.fillStyle = "rgba(200,145,47,.05)"; ctx.fill();
+
+  // range rings every 30 m
+  ctx.strokeStyle = "rgba(127,212,193,.16)"; ctx.lineWidth = 1;
+  for (let r = 30; r <= SCOPE_RANGE; r += 30) {
+    ctx.beginPath(); ctx.arc(cxp, cyp, (r / SCOPE_RANGE) * R, 0, Math.PI * 2); ctx.stroke();
+  }
+  // confirm-range ring, drawn as the one meaningful threshold on the display
+  ctx.strokeStyle = "rgba(217,85,59,.35)";
+  ctx.setLineDash([4, 5]);
+  ctx.beginPath(); ctx.arc(cxp, cyp, (T.confirmRange / SCOPE_RANGE) * R, 0, Math.PI * 2); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // bearing ticks
+  ctx.strokeStyle = "rgba(159,179,184,.22)";
+  ctx.fillStyle = "rgba(159,179,184,.6)";
+  ctx.font = '10px "IBM Plex Mono", monospace';
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  for (let b = 0; b < 360; b += 30) {
+    const a = (b - 90) * Math.PI / 180;
+    ctx.beginPath();
+    ctx.moveTo(cxp + Math.cos(a) * (R - 7), cyp + Math.sin(a) * (R - 7));
+    ctx.lineTo(cxp + Math.cos(a) * R, cyp + Math.sin(a) * R);
+    ctx.stroke();
+    if (b % 90 === 0) {
+      ctx.fillText(String(b).padStart(3, "0"),
+        cxp + Math.cos(a) * (R - 20), cyp + Math.sin(a) * (R - 20));
+    }
+  }
+
+  // rotating sweep
+  const sa = (sweepAngle - 90) * Math.PI / 180;
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  for (let i = 0; i < 22; i++) {
+    const a = sa - i * 0.035;
+    ctx.strokeStyle = `rgba(127,212,193,${0.16 * (1 - i / 22)})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cxp, cyp);
+    ctx.lineTo(cxp + Math.cos(a) * R, cyp + Math.sin(a) * R);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // ping flash
+  if (sweepFlash > 0) {
+    ctx.strokeStyle = `rgba(200,145,47,${sweepFlash * 0.5})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(cxp, cyp, (1 - sweepFlash) * R, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // contact blips, plotted geographically so they stay put as you steam past
+  for (const b of blips) {
+    const age = G.t - b.born;
+    if (age > 14) continue;
+    const fade = clamp01(1 - age / 14) * clamp01(0.42 + b.clarity * 0.58);
+    const q = toScope(b.x, b.z);
+    const bio = b.kind === KIND.BIOLOGICAL;
+    const rr = 3 + b.clarity * 5;
+    ctx.fillStyle = bio ? `rgba(217,85,59,${fade})` : `rgba(127,212,193,${fade * 0.8})`;
+    ctx.beginPath(); ctx.arc(q.px, q.py, rr, 0, Math.PI * 2); ctx.fill();
+    if (bio && b.clarity >= T.confirmClarity) {
+      ctx.strokeStyle = `rgba(217,85,59,${fade})`; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(q.px, q.py, rr + 5, 0, Math.PI * 2); ctx.stroke();
+    }
+  }
+
+  // truth overlay
+  if (showTruth) {
+    const q = toScope(G.nessie.x, G.nessie.z);
+    ctx.strokeStyle = "rgba(200,145,47,.85)"; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(q.px, q.py, 9, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(q.px - 14, q.py); ctx.lineTo(q.px + 14, q.py);
+    ctx.moveTo(q.px, q.py - 14); ctx.lineTo(q.px, q.py + 14); ctx.stroke();
+    ctx.fillStyle = "rgba(200,145,47,.9)";
+    ctx.font = '10px "IBM Plex Mono", monospace';
+    ctx.textAlign = "left";
+    ctx.fillText(G.nessie.state.toUpperCase(), q.px + 13, q.py - 13);
+    if (G.nessie.target) {
+      const tq = toScope(G.nessie.target.x, G.nessie.target.z);
+      ctx.strokeStyle = "rgba(200,145,47,.3)"; ctx.setLineDash([3, 4]);
+      ctx.beginPath(); ctx.moveTo(q.px, q.py); ctx.lineTo(tq.px, tq.py); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+
+  // assistant
+  const aq = toScope(G.assistant.x, G.assistant.z);
+  drawHull(aq.px, aq.py, G.assistant.heading, "#7FD4C1", 5);
+
+  ctx.restore();
+
+  // own ship, always on top and unclipped
+  drawHull(cxp, cyp, G.player.heading, "#E8E4D9", 7);
+  ctx.strokeStyle = "rgba(232,228,217,.25)"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(cxp, cyp, R, 0, Math.PI * 2); ctx.stroke();
+}
+
+function drawHull(px, py, heading, color, size) {
+  const a = (heading - 90) * Math.PI / 180;
+  ctx.save();
+  ctx.translate(px, py); ctx.rotate(a);
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(size * 1.5, 0);
+  ctx.lineTo(-size, size * 0.75);
+  ctx.lineTo(-size * 0.5, 0);
+  ctx.lineTo(-size, -size * 0.75);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+/* ===========================================================================
+   HUD
+   =========================================================================== */
+const el = {
+  time: document.getElementById("g-time"),
+  conf: document.getElementById("g-conf"),
+  sonar: document.getElementById("g-sonar"),
+  speed: document.getElementById("g-speed"),
+  hdg: document.getElementById("tag-hdg"),
+  depth: document.getElementById("tag-depth"),
+  tagRange: document.getElementById("tag-range"),
+  log: document.getElementById("log"),
+  logStamp: document.getElementById("log-stamp"),
+  radio: document.getElementById("radio"),
+  tState: document.getElementById("t-state"),
+  tThreat: document.getElementById("t-threat"),
+  tSig: document.getElementById("t-sig"),
+  tDepth: document.getElementById("t-depth"),
+  tBrg: document.getElementById("t-brg"),
+  veil: document.getElementById("veil"),
+  veilTitle: document.getElementById("veil-title"),
+  veilBody: document.getElementById("veil-body"),
+  veilBtn: document.getElementById("veil-btn")
+};
+
+function renderLog(contacts, confirmed) {
+  if (!contacts.length) {
+    el.log.innerHTML = '<div class="log-empty">No returns on that sweep.</div>';
+    return;
+  }
+  el.log.innerHTML = contacts
+    .slice()
+    .sort((a, b) => b.clarity - a.clarity)
+    .map(c => {
+      // Weak returns stay unidentified — the player must ping again to resolve them.
+      const label = c.clarity >= 0.6 ? c.kind : "Unidentified";
+      const bio = c.kind === KIND.BIOLOGICAL;
+      const isConf = bio && confirmed && c.clarity >= T.confirmClarity;
+      return `<div class="log-row${bio ? " bio" : ""}${isConf ? " conf" : ""}">
+        <span class="cls">${label}</span>
+        <span>${String(Math.round(c.bearing)).padStart(3, "0")}&deg;</span>
+        <span>${String(Math.round(c.range)).padStart(3, "0")}m</span>
+        <span>${String(Math.round(c.clarity * 100)).padStart(2, "0")}%</span>
+      </div>`;
+    }).join("");
+}
+
+function updateHud() {
+  const m = Math.floor(Math.max(0, G.clock) / 60), s = Math.floor(Math.max(0, G.clock) % 60);
+  el.time.textContent = `${m}:${String(s).padStart(2, "0")}`;
+  el.time.className = "gauge-v" + (G.clock < 60 ? " warn" : "");
+  el.conf.textContent = `${G.sightings} / ${T.targetSightings}`;
+  el.conf.className = "gauge-v" + (G.sightings > 0 ? " lit" : "");
+
+  const cd = G.player.nextPing - G.t;
+  el.sonar.textContent = cd <= 0 ? "READY" : cd.toFixed(1) + "s";
+  el.sonar.className = "gauge-v" + (cd <= 0 ? " lit" : "");
+  el.speed.textContent = G.player.speed.toFixed(1);
+  el.hdg.textContent = String(Math.round(G.player.heading)).padStart(3, "0");
+  el.depth.textContent = showTruth ? G.nessie.depth.toFixed(1) + " m" : "— m";
+  el.tagRange.textContent = `Range ${SCOPE_RANGE} m`;
+
+  const st = G.nessie.state;
+  el.tState.textContent = st;
+  el.tState.className = "state-pill st-" + st.toLowerCase();
+  el.tThreat.style.width = (G.nessie.threat * 100).toFixed(0) + "%";
+  el.tThreat.className = G.nessie.threat >= T.fleeEnterThreshold ? "hot" : "";
+  el.tSig.textContent = nessieSignature().toFixed(2);
+  el.tDepth.textContent = G.nessie.depth.toFixed(1) + " m";
+  el.tBrg.textContent = showTruth
+    ? String(Math.round(bearingOf(G.nessie.x - G.player.x, G.nessie.z - G.player.z))).padStart(3, "0") + "°"
+    : "hidden";
+
+  if (G.radioUntil && G.t > G.radioUntil) { el.radio.textContent = ""; G.radioUntil = 0; }
+}
+
+/* ===========================================================================
+   LOOP
+   =========================================================================== */
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.05, (now - lastT) / 1000 || 0);
+  lastT = now;
+
+  if (running && !ended) {
+    G.t += dt;
+    G.clock -= dt;
+    updatePlayer(dt);
+    updateNessie(dt);
+    updateAssistant(dt);
+    if (G.clock <= 0) finish(false);
+  }
+
+  sweepAngle = (sweepAngle + 90 * dt) % 360;
+  if (sweepFlash > 0) sweepFlash = Math.max(0, sweepFlash - dt * 1.1);
+
+  draw();
+  updateHud();
+}
+
+function finish(won) {
+  ended = true;
+  running = false;
+  el.veilTitle.textContent = won ? "She's real" : "The loch keeps its secret";
+  el.veilTitle.className = won ? "win" : "loss";
+  el.veilBody.textContent = won
+    ? `${G.sightings} of ${T.targetSightings} confirmed contacts logged in ${Math.round(T.huntDurationSeconds - G.clock)} seconds, over ${G.sweeps} sweeps. Evidence secured.`
+    : `Only ${G.sightings} of ${T.targetSightings} contacts confirmed across ${G.sweeps} sweeps. She stayed in the noise.`;
+  el.veilBtn.textContent = "Run it again";
+  el.veil.hidden = false;
+}
+
+function start() {
+  newGame();
+  el.veil.hidden = true;
+  running = true;
+  ended = false;
+  initAudio();
+}
+
+/* ===========================================================================
+   INPUT
+   =========================================================================== */
+const keys = new Set();
+addEventListener("keydown", e => {
+  const k = e.key.toLowerCase();
+  if ([" ", "w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(k)) e.preventDefault();
+  if (k === " ") { running ? ping() : start(); return; }
+  if (k === "t") { toggleTruth(); return; }
+  if (k === "r") { start(); return; }
+  keys.add(k);
+});
+addEventListener("keyup", e => keys.delete(e.key.toLowerCase()));
+addEventListener("blur", () => keys.clear());
+
+function toggleTruth() {
+  showTruth = !showTruth;
+  document.getElementById("btn-truth").setAttribute("aria-pressed", String(showTruth));
+}
+
+document.getElementById("btn-ping").addEventListener("click", () => running ? ping() : start());
+document.getElementById("btn-truth").addEventListener("click", toggleTruth);
+document.getElementById("btn-restart").addEventListener("click", start);
+el.veilBtn.addEventListener("click", start);
+
+/* ===========================================================================
+   AUDIO — a short decaying sweep, built on first gesture (autoplay policy).
+   =========================================================================== */
+let actx = null, soundOn = false;
+function initAudio() {
+  if (actx || !soundOn) return;
+  try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { actx = null; }
+}
+function playPing(freq, gain) {
+  if (!soundOn || !actx) return;
+  const t0 = actx.currentTime;
+  const osc = actx.createOscillator(), g = actx.createGain();
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(freq, t0);
+  osc.frequency.exponentialRampToValueAtTime(freq * 0.55, t0 + 0.5);
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(gain * 0.22, t0 + 0.015);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.75);
+  osc.connect(g); g.connect(actx.destination);
+  osc.start(t0); osc.stop(t0 + 0.8);
+}
+document.getElementById("btn-sound").addEventListener("click", e => {
+  soundOn = !soundOn;
+  e.currentTarget.setAttribute("aria-pressed", String(soundOn));
+  initAudio();
+  if (soundOn && actx && actx.state === "suspended") actx.resume();
+});
+
+/* ===========================================================================
+   TUNING PANEL — sliders named for the Unity inspector fields they mirror.
+   =========================================================================== */
+const tuneRoot = document.getElementById("tuning");
+const outputs = {};
+
+for (const [group, fields] of TUNE_UI) {
+  const g = document.createElement("div");
+  g.className = "tune-group";
+  g.innerHTML = `<h4>${group}</h4>`;
+  for (const [key, min, max, step] of fields) {
+    const row = document.createElement("div");
+    row.className = "tune";
+    const id = "tn-" + key;
+    row.innerHTML =
+      `<label for="${id}">${key}</label>` +
+      `<output id="out-${key}">${T[key]}</output>` +
+      `<input type="range" id="${id}" min="${min}" max="${max}" step="${step}" value="${T[key]}">`;
+    g.appendChild(row);
+    const out = row.querySelector("output");
+    outputs[key] = out;
+    row.querySelector("input").addEventListener("input", ev => {
+      T[key] = parseFloat(ev.target.value);
+      out.textContent = Number.isInteger(step) ? T[key] : T[key].toFixed(2).replace(/\.?0+$/, "");
+      out.classList.toggle("changed", T[key] !== DEFAULTS[key]);
+    });
+  }
+  tuneRoot.appendChild(g);
+}
+
+document.getElementById("btn-copy").addEventListener("click", async e => {
+  const owner = k =>
+    /Signature|Threshold|Speed$|awareness|threat|minState|maxFlee|roamRadius/i.test(k) &&
+      !/maxForward|maxReverse|fullRudder/.test(k) ? "NessieAI"
+    : /^assist|^follow|^report/.test(k) ? "AssistantAI"
+    : /^hunt|^target/.test(k) ? "GameManager"
+    : "PlayerController";
+
+  const changed = Object.keys(DEFAULTS)
+    .filter(k => T[k] !== DEFAULTS[k])
+    .map(k => `${owner(k)}.${k} = ${T[k]}`);
+
+  const text = changed.length
+    ? changed.join("\n")
+    : "No values changed from the shipped defaults.";
+
+  try {
+    await navigator.clipboard.writeText(text);
+    e.currentTarget.textContent = changed.length ? `Copied ${changed.length}` : "Nothing changed";
+  } catch (err) {
+    e.currentTarget.textContent = "Copy blocked";
+  }
+  setTimeout(() => { e.currentTarget.textContent = "Copy changed values"; }, 1800);
+});
+
+document.getElementById("btn-reset-tune").addEventListener("click", () => {
+  Object.assign(T, DEFAULTS);
+  for (const [, fields] of TUNE_UI) {
+    for (const [key] of fields) {
+      const input = document.getElementById("tn-" + key);
+      if (input) input.value = T[key];
+      if (outputs[key]) {
+        outputs[key].textContent = T[key];
+        outputs[key].classList.remove("changed");
+      }
+    }
+  }
+});
+
+/* ===========================================================================
+   BOOT — the scope renders at rest, running its sweep, before you press start.
+   =========================================================================== */
+newGame();
+resize();
+requestAnimationFrame(frame);
+</script>
