@@ -59,22 +59,39 @@ namespace LochNess.Boot
             // 2. Netcode.
             NetworkManager net = BuildNetworkManager();
 
-            // 3. Prefabs, forged from code and registered by stable hash.
-            GameObject crew = NetworkPrefabForge.Register(net, "lochness.crew", CrewBuilder.Build());
-            GameObject boat = NetworkPrefabForge.Register(net, "lochness.boat", BoatBuilder.Build());
-            GameObject crewmate = NetworkPrefabForge.Register(net, "lochness.crewmate", CrewmateBuilder.Build());
-            GameObject nessie = NetworkPrefabForge.Register(net, "lochness.nessie", NessieBuilder.Build());
-            GameObject match = NetworkPrefabForge.Register(net, "lochness.match", BuildMatchState());
-
-            // NGO wants a player prefab registered even though GameManager spawns crew
-            // by hand (see its approval callback for why CreatePlayerObject is false).
-            net.NetworkConfig.PlayerPrefab = crew;
-
-            // 4. Session control and interface.
+            // 3. Session control and interface.
+            //
+            // Built BEFORE the prefabs, deliberately. Forging registers prefabs with
+            // Netcode, and that is the one step here that can throw on an engine or
+            // package version this was not written against. If it takes the UI down
+            // with it the player gets a blank screen and no way to see what happened;
+            // this way the menu is always up and the failure is a message on it.
             var manager = gameObject.AddComponent<GameManager>();
-            manager.Bind(crew, boat, crewmate, nessie, match);
-
             gameObject.AddComponent<GameUI>();
+
+            // 4. Prefabs, forged from code and registered by stable hash.
+            try
+            {
+                GameObject crew = NetworkPrefabForge.Register(net, "lochness.crew", CrewBuilder.Build());
+                GameObject boat = NetworkPrefabForge.Register(net, "lochness.boat", BoatBuilder.Build());
+                GameObject crewmate = NetworkPrefabForge.Register(net, "lochness.crewmate", CrewmateBuilder.Build());
+                GameObject nessie = NetworkPrefabForge.Register(net, "lochness.nessie", NessieBuilder.Build());
+                GameObject match = NetworkPrefabForge.Register(net, "lochness.match", BuildMatchState());
+
+                // NGO wants a player prefab registered even though GameManager spawns
+                // crew by hand (see its approval callback for why CreatePlayerObject
+                // is false).
+                net.NetworkConfig.PlayerPrefab = crew;
+
+                manager.Bind(crew, boat, crewmate, nessie, match);
+                Debug.Log("[Boot] Ready.");
+            }
+            catch (System.Exception error)
+            {
+                // GameManager refuses to start a session with null prefabs and says so
+                // on the title screen, so this is reported, not silently survived.
+                Debug.LogError($"[Boot] Could not build the network prefabs: {error}");
+            }
         }
 
         private NetworkManager BuildNetworkManager()
